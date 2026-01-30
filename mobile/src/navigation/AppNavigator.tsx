@@ -17,6 +17,8 @@ import { RootStackParamList, MainTabParamList } from '../types';
 // Screens
 import LoginScreen from '../screens/LoginScreen';
 import ProgramsScreen from '../screens/ProgramsScreen';
+import ProgramDetailScreen from '../screens/ProgramDetailScreen';
+import ChannelScreen from '../screens/ChannelScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 
 // Create navigators
@@ -49,16 +51,6 @@ function JoinProgramScreen() {
     <View style={styles.placeholder}>
       <Text style={styles.placeholderText}>➕</Text>
       <Text style={styles.placeholderTitle}>Join Program</Text>
-      <Text style={styles.placeholderSubtitle}>Coming soon</Text>
-    </View>
-  );
-}
-
-function ProgramDetailScreen() {
-  return (
-    <View style={styles.placeholder}>
-      <Text style={styles.placeholderText}>📚</Text>
-      <Text style={styles.placeholderTitle}>Program Details</Text>
       <Text style={styles.placeholderSubtitle}>Coming soon</Text>
     </View>
   );
@@ -165,8 +157,20 @@ export default function AppNavigator() {
                 headerShown: true,
                 headerStyle: { backgroundColor: colors.backgroundSecondary },
                 headerTintColor: colors.text,
+                headerTitleStyle: { fontWeight: '600' },
                 title: 'Program',
               }}
+            />
+            <Stack.Screen
+              name="Channel"
+              component={ChannelScreen}
+              options={({ route }) => ({
+                headerShown: true,
+                headerStyle: { backgroundColor: colors.backgroundSecondary },
+                headerTintColor: colors.text,
+                headerTitleStyle: { fontWeight: '600' },
+                title: `#${route.params?.channelName || 'Channel'}`,
+              })}
             />
             <Stack.Screen
               name="JoinProgram"

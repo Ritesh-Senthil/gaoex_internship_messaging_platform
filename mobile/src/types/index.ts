@@ -39,14 +39,23 @@ export interface Program {
   nickname: string | null;
 }
 
-export interface ProgramDetail extends Program {
+export interface ProgramDetail {
+  id: string;
+  name: string;
+  description: string | null;
+  iconUrl: string | null;
+  inviteCode: string;
+  isDefault: boolean;
   owner: {
     id: string;
     displayName: string;
     avatarUrl: string | null;
   };
   categories: Category[];
-  channels: Channel[];
+  channels: Channel[]; // Uncategorized channels
+  _count: {
+    memberships: number;
+  };
 }
 
 // ============================================
@@ -194,7 +203,7 @@ export type RootStackParamList = {
   ProgramDetail: { programId: string };
   Channel: { channelId: string; channelName: string };
   DirectMessage: { conversationId: string };
-  Profile: { userId: string };
+  UserProfile: { userId: string };
   Settings: undefined;
   JoinProgram: undefined;
   CreateProgram: undefined;

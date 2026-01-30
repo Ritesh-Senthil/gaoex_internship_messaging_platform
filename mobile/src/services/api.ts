@@ -5,7 +5,7 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { API_CONFIG, APP_CONFIG } from '../constants/config';
-import { ApiResponse, AuthTokens, User, Program } from '../types';
+import { ApiResponse, AuthTokens, User, Program, ProgramDetail } from '../types';
 
 // Create axios instance
 const api: AxiosInstance = axios.create({
@@ -205,9 +205,9 @@ export const programApi = {
   },
   
   /**
-   * Get program by ID
+   * Get program by ID (with full details including categories and channels)
    */
-  async getProgram(programId: string): Promise<ApiResponse<{ program: Program }>> {
+  async getProgram(programId: string): Promise<ApiResponse<{ program: ProgramDetail }>> {
     const response = await api.get(`/programs/${programId}`);
     return response.data;
   },

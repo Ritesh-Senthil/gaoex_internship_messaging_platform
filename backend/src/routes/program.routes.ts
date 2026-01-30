@@ -220,7 +220,7 @@ router.post('/', authenticate, async (req: Request, res: Response, next: NextFun
 
 /**
  * GET /api/programs/:id
- * Get program details
+ * Get program details with categories and channels
  */
 router.get('/:id', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -238,6 +238,7 @@ router.get('/:id', authenticate, async (req: Request, res: Response, next: NextF
       throw new ForbiddenError('You are not a member of this program');
     }
 
+    // Get program with all related data
     const program = await prisma.program.findUnique({
       where: { id },
       include: {
@@ -248,8 +249,38 @@ router.get('/:id', authenticate, async (req: Request, res: Response, next: NextF
             avatarUrl: true,
           },
         },
+        categories: {
+          orderBy: { position: 'asc' },
+          include: {
+            channels: {
+              where: { isArchived: false },
+              orderBy: { position: 'asc' },
+              select: {
+                id: true,
+                name: true,
+                topic: true,
+                type: true,
+                position: true,
+              },
+            },
+          },
+        },
+        channels: {
+          where: { 
+            isArchived: false,
+            categoryId: null, // Uncategorized channels
+          },
+          orderBy: { position: 'asc' },
+          select: {
+            id: true,
+            name: true,
+            topic: true,
+            type: true,
+            position: true,
+          },
+        },
         _count: {
-          select: { memberships: true, channels: true },
+          select: { memberships: true },
         },
       },
     });
