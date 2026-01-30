@@ -1,0 +1,383 @@
+// InternHub Database Schema
+// Discord-style collaboration platform for internship programs
+// Using Supabase PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")  // For Supabase connection pooling
+}
+
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+model User {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  displayName     String
+  avatarUrl       String?
+  authProvider    AuthProvider
+  authProviderId  String
+  isSuperAdmin    Boolean   @default(false)
+  isActive        Boolean   @default(true)
+  lastSeenAt      DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  ownedPrograms           Program[]               @relation("ProgramOwner")
+  memberships             ProgramMembership[]
+  messages                Message[]
+  conversationParticipants ConversationParticipant[]
+  refreshTokens           RefreshToken[]
+  sentInvites             Invite[]                @relation("InviteSender")
+  reports                 Report[]                @relation("Reporter")
+  reviewedReports         Report[]                @relation("ReportReviewer")
+  createdChannels         Channel[]               @relation("ChannelCreator")
+  userPermissionOverrides PermissionOverride[]    @relation("UserOverride")
+
+  @@unique([authProvider, authProviderId])
+  @@index([email])
+  @@index([lastSeenAt])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+enum AuthProvider {
+  GOOGLE
+  FACEBOOK
+}
+
+// ============================================
+// PROGRAMS (Servers/Guilds)
+// ============================================
+
+model Program {
+  id          String        @id @default(uuid())
+  name        String
+  description String?
+  iconUrl     String?
+  inviteCode  String        @unique @default(uuid())
+  ownerId     String
+  owner       User          @relation("ProgramOwner", fields: [ownerId], references: [id])
+  status      ProgramStatus @default(ACTIVE)
+  isDefault   Boolean       @default(false)
+  startDate   DateTime?
+  endDate     DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  // Relations
+  memberships ProgramMembership[]
+  roles       Role[]
+  categories  Category[]
+  channels    Channel[]
+  invites     Invite[]
+  reports     Report[]
+
+  @@index([inviteCode])
+  @@index([isDefault])
+  @@index([status])
+}
+
+enum ProgramStatus {
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+// ============================================
+// MEMBERSHIP & ROLES
+// ============================================
+
+model ProgramMembership {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  programId String
+  program   Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  nickname  String?
+  joinedAt  DateTime @default(now())
+
+  // Relations
+  memberRoles MemberRole[]
+
+  @@unique([userId, programId])
+  @@index([userId])
+  @@index([programId])
+}
+
+model Role {
+  id            String   @id @default(uuid())
+  programId     String
+  program       Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  name          String
+  color         String   @default("#99AAB5")  // Default Discord gray
+  position      Int      @default(0)
+  permissions   BigInt   @default(0)
+  isHoisted     Boolean  @default(false)
+  isMentionable Boolean  @default(false)
+  isEveryone    Boolean  @default(false)  // True for @everyone role
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  memberRoles         MemberRole[]
+  permissionOverrides PermissionOverride[] @relation("RoleOverride")
+
+  @@unique([programId, name])
+  @@index([programId])
+  @@index([position])
+}
+
+model MemberRole {
+  id           String            @id @default(uuid())
+  membershipId String
+  membership   ProgramMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  roleId       String
+  role         Role              @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assignedAt   DateTime          @default(now())
+
+  @@unique([membershipId, roleId])
+  @@index([membershipId])
+  @@index([roleId])
+}
+
+// ============================================
+// CATEGORIES & CHANNELS
+// ============================================
+
+model Category {
+  id        String   @id @default(uuid())
+  programId String
+  program   Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  name      String
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  channels            Channel[]
+  permissionOverrides PermissionOverride[] @relation("CategoryOverride")
+
+  @@unique([programId, name])
+  @@index([programId])
+  @@index([position])
+}
+
+model Channel {
+  id         String      @id @default(uuid())
+  programId  String
+  program    Program     @relation(fields: [programId], references: [id], onDelete: Cascade)
+  categoryId String?
+  category   Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  name       String
+  topic      String?
+  type       ChannelType @default(TEXT)
+  position   Int         @default(0)
+  isArchived Boolean     @default(false)
+  createdById String?
+  createdBy  User?       @relation("ChannelCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  // Relations
+  messages            Message[]
+  permissionOverrides PermissionOverride[] @relation("ChannelOverride")
+
+  @@unique([programId, name])
+  @@index([programId])
+  @@index([categoryId])
+  @@index([type])
+}
+
+enum ChannelType {
+  TEXT
+  ANNOUNCEMENT
+}
+
+// ============================================
+// PERMISSION OVERRIDES
+// ============================================
+
+model PermissionOverride {
+  id         String    @id @default(uuid())
+  channelId  String?
+  channel    Channel?  @relation("ChannelOverride", fields: [channelId], references: [id], onDelete: Cascade)
+  categoryId String?
+  category   Category? @relation("CategoryOverride", fields: [categoryId], references: [id], onDelete: Cascade)
+  roleId     String?
+  role       Role?     @relation("RoleOverride", fields: [roleId], references: [id], onDelete: Cascade)
+  userId     String?
+  user       User?     @relation("UserOverride", fields: [userId], references: [id], onDelete: Cascade)
+  allow      BigInt    @default(0)
+  deny       BigInt    @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([channelId, roleId])
+  @@unique([channelId, userId])
+  @@unique([categoryId, roleId])
+  @@unique([categoryId, userId])
+  @@index([channelId])
+  @@index([categoryId])
+  @@index([roleId])
+  @@index([userId])
+}
+
+// ============================================
+// DIRECT MESSAGES
+// ============================================
+
+model Conversation {
+  id        String   @id @default(uuid())
+  isGroup   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  participants ConversationParticipant[]
+  messages     Message[]
+}
+
+model ConversationParticipant {
+  id             String       @id @default(uuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  isMuted        Boolean      @default(false)
+  lastReadAt     DateTime     @default(now())
+  joinedAt       DateTime     @default(now())
+
+  @@unique([userId, conversationId])
+  @@index([userId])
+  @@index([conversationId])
+}
+
+// ============================================
+// MESSAGES & ATTACHMENTS
+// ============================================
+
+model Message {
+  id              String        @id @default(uuid())
+  authorId        String
+  author          User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  channelId       String?
+  channel         Channel?      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  conversationId  String?
+  conversation    Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  content         String
+  mentionedUsers  String[]      @default([])
+  mentionedRoles  String[]      @default([])
+  mentionEveryone Boolean       @default(false)
+  isEdited        Boolean       @default(false)
+  isPinned        Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  attachments Attachment[]
+  reports     Report[]
+
+  @@index([channelId, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([authorId])
+  @@index([isPinned])
+}
+
+model Attachment {
+  id        String   @id @default(uuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  fileName  String
+  fileUrl   String
+  mimeType  String
+  fileSize  Int
+  createdAt DateTime @default(now())
+
+  @@index([messageId])
+}
+
+// ============================================
+// INVITES
+// ============================================
+
+model Invite {
+  id          String       @id @default(uuid())
+  programId   String
+  program     Program      @relation(fields: [programId], references: [id], onDelete: Cascade)
+  invitedById String
+  invitedBy   User         @relation("InviteSender", fields: [invitedById], references: [id], onDelete: Cascade)
+  email       String
+  token       String       @unique @default(uuid())
+  status      InviteStatus @default(PENDING)
+  createdAt   DateTime     @default(now())
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+
+  @@index([programId])
+  @@index([token])
+  @@index([email])
+  @@index([status])
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+}
+
+// ============================================
+// REPORTS
+// ============================================
+
+model Report {
+  id           String       @id @default(uuid())
+  messageId    String
+  message      Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  reporterId   String
+  reporter     User         @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  programId    String
+  program      Program      @relation(fields: [programId], references: [id], onDelete: Cascade)
+  reason       ReportReason
+  notes        String?
+  status       ReportStatus @default(PENDING)
+  reviewedById String?
+  reviewedBy   User?        @relation("ReportReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime     @default(now())
+  reviewedAt   DateTime?
+
+  @@index([programId])
+  @@index([status])
+  @@index([messageId])
+}
+
+enum ReportReason {
+  HARASSMENT
+  SPAM
+  INAPPROPRIATE
+  OFF_TOPIC
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWED
+  DISMISSED
+}

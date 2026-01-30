@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "InternHub",
+    "slug": "internhub",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "scheme": "internhub",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1E1F22"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.internhub.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.internhub.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1E1F22"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-web-browser",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.543948018812-5nv38bcnot6qd3pecsov6bubtij3ftas"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "7b7d8aa7-feb3-4708-90f7-9a9ef01c2c97"
+      }
+    }
+  }
+}
