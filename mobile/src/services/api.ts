@@ -5,7 +5,7 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { API_CONFIG, APP_CONFIG } from '../constants/config';
-import { ApiResponse, AuthTokens, User, Program, ProgramDetail } from '../types';
+import { ApiResponse, AuthTokens, User, Program, ProgramDetail, Message, Channel } from '../types';
 
 // Create axios instance
 const api: AxiosInstance = axios.create({
@@ -237,6 +237,66 @@ export const programApi = {
    */
   async regenerateInviteCode(programId: string): Promise<ApiResponse<{ inviteCode: string }>> {
     const response = await api.post(`/programs/${programId}/invite/regenerate`);
+    return response.data;
+  },
+};
+
+// ============================================
+// CHANNEL API
+// ============================================
+
+export const channelApi = {
+  /**
+   * Get channel details
+   */
+  async getChannel(channelId: string): Promise<ApiResponse<{ channel: Channel }>> {
+    const response = await api.get(`/channels/${channelId}`);
+    return response.data;
+  },
+
+  /**
+   * Get messages in a channel
+   */
+  async getMessages(
+    channelId: string,
+    options?: { limit?: number; before?: string; after?: string }
+  ): Promise<ApiResponse<{ messages: Message[]; hasMore: boolean }>> {
+    const params = new URLSearchParams();
+    if (options?.limit) params.append('limit', options.limit.toString());
+    if (options?.before) params.append('before', options.before);
+    if (options?.after) params.append('after', options.after);
+
+    const queryString = params.toString();
+    const url = `/channels/${channelId}/messages${queryString ? `?${queryString}` : ''}`;
+    const response = await api.get(url);
+    return response.data;
+  },
+
+  /**
+   * Send a message to a channel
+   */
+  async sendMessage(channelId: string, content: string): Promise<ApiResponse<{ message: Message }>> {
+    const response = await api.post(`/channels/${channelId}/messages`, { content });
+    return response.data;
+  },
+
+  /**
+   * Edit a message
+   */
+  async editMessage(
+    channelId: string,
+    messageId: string,
+    content: string
+  ): Promise<ApiResponse<{ message: Message }>> {
+    const response = await api.patch(`/channels/${channelId}/messages/${messageId}`, { content });
+    return response.data;
+  },
+
+  /**
+   * Delete a message
+   */
+  async deleteMessage(channelId: string, messageId: string): Promise<ApiResponse<void>> {
+    const response = await api.delete(`/channels/${channelId}/messages/${messageId}`);
     return response.data;
   },
 };

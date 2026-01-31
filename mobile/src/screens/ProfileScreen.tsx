@@ -68,6 +68,11 @@ export default function ProfileScreen() {
 
           <Text style={styles.displayName}>{user?.displayName}</Text>
           <Text style={styles.email}>{user?.email}</Text>
+          {user?.isSuperAdmin && (
+            <View style={styles.superAdminTag}>
+              <Text style={styles.superAdminTagText}>👑 Super Admin</Text>
+            </View>
+          )}
         </View>
 
         {/* Menu Items */}
@@ -197,6 +202,18 @@ const styles = StyleSheet.create({
   email: {
     fontSize: typography.fontSize.md,
     color: colors.textSecondary,
+  },
+  superAdminTag: {
+    marginTop: spacing.sm,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.full,
+  },
+  superAdminTagText: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.background,
   },
   menuSection: {
     padding: spacing.lg,
