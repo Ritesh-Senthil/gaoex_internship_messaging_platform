@@ -62,15 +62,53 @@ export interface ProgramDetail {
 // ROLE TYPES
 // ============================================
 
+// Tier hierarchy: Lower number = more authority
+// 0: Owner, 1: Admin, 2: Moderator, 3: Member
+export type RoleTier = 0 | 1 | 2 | 3;
+
+export const TIER_NAMES: Record<RoleTier, string> = {
+  0: 'Owner',
+  1: 'Admin',
+  2: 'Moderator',
+  3: 'Member',
+};
+
 export interface Role {
   id: string;
   name: string;
   color: string;
-  position: number;
+  tier: RoleTier;
+  tierName?: string;
   permissions: string; // BigInt as string
   isHoisted: boolean;
   isMentionable: boolean;
   isEveryone: boolean;
+  memberCount?: number;
+  permissionNames?: string[];
+}
+
+export interface RoleDetail extends Role {
+  members: {
+    id: string;
+    userId: string;
+    displayName: string;
+    avatarUrl: string | null;
+  }[];
+}
+
+export interface Permission {
+  key: string;
+  name: string;
+  description: string;
+  category: 'Program' | 'Channel' | 'Member';
+  minTier?: number;
+}
+
+export interface TierInfo {
+  tier: number;
+  name: string;
+  description: string;
+  canCreate?: boolean;
 }
 
 // ============================================
@@ -214,6 +252,10 @@ export type RootStackParamList = {
   Channel: { channelId: string; channelName: string };
   MemberDirectory: { programId: string; programName: string };
   MemberProfile: { programId: string; memberId: string; memberName: string };
+  RolesList: { programId: string; programName: string };
+  RoleDetail: { programId: string; roleId: string; roleName: string };
+  CreateRole: { programId: string };
+  AssignRoles: { programId: string; memberId: string; memberName: string };
   DirectMessage: { conversationId: string };
   UserProfile: { userId: string };
   Settings: undefined;

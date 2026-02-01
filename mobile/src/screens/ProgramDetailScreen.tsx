@@ -114,6 +114,15 @@ export default function ProgramDetailScreen() {
     }
   };
 
+  const handleRolesPress = () => {
+    if (program) {
+      navigation.navigate('RolesList', {
+        programId: program.id,
+        programName: program.name,
+      });
+    }
+  };
+
   const renderChannel = (channel: Channel) => (
     <TouchableOpacity
       key={channel.id}
@@ -200,11 +209,19 @@ export default function ProgramDetailScreen() {
           </View>
           <View style={styles.programInfo}>
             <Text style={styles.programName}>{program.name}</Text>
-            <TouchableOpacity onPress={handleMembersPress}>
-              <Text style={styles.programMetaLink}>
-                👥 {program._count.memberships} members
-              </Text>
-            </TouchableOpacity>
+            <View style={styles.programMetaRow}>
+              <TouchableOpacity onPress={handleMembersPress}>
+                <Text style={styles.programMetaLink}>
+                  👥 {program._count.memberships} members
+                </Text>
+              </TouchableOpacity>
+              <Text style={styles.programMetaSeparator}>•</Text>
+              <TouchableOpacity onPress={handleRolesPress}>
+                <Text style={styles.programMetaLink}>
+                  🏷️ Roles
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
           <TouchableOpacity style={styles.inviteButton} onPress={handleInvitePress}>
             <Text style={styles.inviteButtonText}>Invite</Text>
@@ -320,10 +337,19 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginTop: spacing.xs,
   },
+  programMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.xs,
+  },
   programMetaLink: {
     fontSize: typography.fontSize.sm,
     color: colors.primary,
-    marginTop: spacing.xs,
+  },
+  programMetaSeparator: {
+    fontSize: typography.fontSize.sm,
+    color: colors.textMuted,
+    marginHorizontal: spacing.sm,
   },
   inviteButton: {
     backgroundColor: colors.primary,

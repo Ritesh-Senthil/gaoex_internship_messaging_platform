@@ -5,7 +5,7 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { API_CONFIG, APP_CONFIG } from '../constants/config';
-import { ApiResponse, AuthTokens, User, Program, ProgramDetail, Message, Channel, ProgramMember } from '../types';
+import { ApiResponse, AuthTokens, User, Program, ProgramDetail, Message, Channel, ProgramMember, Role, RoleDetail, Permission } from '../types';
 
 // Create axios instance
 const api: AxiosInstance = axios.create({
@@ -313,6 +313,105 @@ export const channelApi = {
    */
   async deleteMessage(channelId: string, messageId: string): Promise<ApiResponse<void>> {
     const response = await api.delete(`/channels/${channelId}/messages/${messageId}`);
+    return response.data;
+  },
+};
+
+// ============================================
+// ROLE API
+// ============================================
+
+export const roleApi = {
+  /**
+   * Get all roles in a program
+   */
+  async getRoles(programId: string): Promise<ApiResponse<{ roles: Role[] }>> {
+    const response = await api.get(`/programs/${programId}/roles`);
+    return response.data;
+  },
+
+  /**
+   * Get a specific role with details
+   */
+  async getRole(programId: string, roleId: string): Promise<ApiResponse<{ role: RoleDetail }>> {
+    const response = await api.get(`/programs/${programId}/roles/${roleId}`);
+    return response.data;
+  },
+
+  /**
+   * Create a new role
+   */
+  async createRole(
+    programId: string,
+    data: {
+      name: string;
+      color?: string;
+      tier?: number;
+      permissions?: string[];
+      isHoisted?: boolean;
+      isMentionable?: boolean;
+    }
+  ): Promise<ApiResponse<{ role: Role }>> {
+    const response = await api.post(`/programs/${programId}/roles`, data);
+    return response.data;
+  },
+
+  /**
+   * Update a role
+   */
+  async updateRole(
+    programId: string,
+    roleId: string,
+    data: {
+      name?: string;
+      color?: string;
+      tier?: number;
+      permissions?: string[];
+      isHoisted?: boolean;
+      isMentionable?: boolean;
+    }
+  ): Promise<ApiResponse<{ role: Role }>> {
+    const response = await api.patch(`/programs/${programId}/roles/${roleId}`, data);
+    return response.data;
+  },
+
+  /**
+   * Delete a role
+   */
+  async deleteRole(programId: string, roleId: string): Promise<ApiResponse<void>> {
+    const response = await api.delete(`/programs/${programId}/roles/${roleId}`);
+    return response.data;
+  },
+
+  /**
+   * Reorder roles
+   */
+  async reorderRoles(programId: string, roleIds: string[]): Promise<ApiResponse<{ roles: Role[] }>> {
+    const response = await api.patch(`/programs/${programId}/roles/reorder`, { roleIds });
+    return response.data;
+  },
+
+  /**
+   * Assign a role to a member
+   */
+  async assignRole(programId: string, memberId: string, roleId: string): Promise<ApiResponse<{ member: ProgramMember }>> {
+    const response = await api.post(`/programs/${programId}/members/${memberId}/roles`, { roleId });
+    return response.data;
+  },
+
+  /**
+   * Remove a role from a member
+   */
+  async removeRole(programId: string, memberId: string, roleId: string): Promise<ApiResponse<void>> {
+    const response = await api.delete(`/programs/${programId}/members/${memberId}/roles/${roleId}`);
+    return response.data;
+  },
+
+  /**
+   * Get available permissions list
+   */
+  async getPermissions(): Promise<ApiResponse<{ permissions: Permission[] }>> {
+    const response = await api.get(`/programs/permissions`);
     return response.data;
   },
 };

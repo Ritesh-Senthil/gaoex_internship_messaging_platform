@@ -23,6 +23,10 @@ import ProfileScreen from '../screens/ProfileScreen';
 import JoinProgramScreen from '../screens/JoinProgramScreen';
 import MemberDirectoryScreen from '../screens/MemberDirectoryScreen';
 import MemberProfileScreen from '../screens/MemberProfileScreen';
+import RolesListScreen from '../screens/RolesListScreen';
+import RoleDetailScreen from '../screens/RoleDetailScreen';
+import CreateRoleScreen from '../screens/CreateRoleScreen';
+import AssignRolesScreen from '../screens/AssignRolesScreen';
 
 // Create navigators
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -251,6 +255,50 @@ export default function AppNavigator() {
                 headerTintColor: colors.text,
                 headerTitleStyle: { fontWeight: '600' },
                 title: route.params?.memberName || 'Profile',
+              })}
+            />
+            <Stack.Screen
+              name="RolesList"
+              component={RolesListScreen}
+              options={{
+                headerShown: true,
+                headerStyle: { backgroundColor: colors.backgroundSecondary },
+                headerTintColor: colors.text,
+                headerTitleStyle: { fontWeight: '600' },
+                title: 'Roles',
+              }}
+            />
+            <Stack.Screen
+              name="RoleDetail"
+              component={RoleDetailScreen}
+              options={({ route }) => ({
+                headerShown: true,
+                headerStyle: { backgroundColor: colors.backgroundSecondary },
+                headerTintColor: colors.text,
+                headerTitleStyle: { fontWeight: '600' },
+                title: route.params?.roleName || 'Role',
+              })}
+            />
+            <Stack.Screen
+              name="CreateRole"
+              component={CreateRoleScreen}
+              options={{
+                headerShown: true,
+                headerStyle: { backgroundColor: colors.backgroundSecondary },
+                headerTintColor: colors.text,
+                title: 'Create Role',
+                presentation: 'modal',
+              }}
+            />
+            <Stack.Screen
+              name="AssignRoles"
+              component={AssignRolesScreen}
+              options={({ route }) => ({
+                headerShown: true,
+                headerStyle: { backgroundColor: colors.backgroundSecondary },
+                headerTintColor: colors.text,
+                title: 'Assign Roles',
+                presentation: 'modal',
               })}
             />
           </>

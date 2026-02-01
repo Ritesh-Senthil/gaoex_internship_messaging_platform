@@ -1,14 +1,14 @@
 /**
  * Member Directory Screen
- * Shows all members of a program
+ * Shows all members of a program, grouped by role/admin status
  */
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  FlatList,
+  SectionList,
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
@@ -23,6 +23,12 @@ import { programApi } from '../services/api';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type RouteProps = RouteProp<RootStackParamList, 'MemberDirectory'>;
+
+interface MemberSection {
+  title: string;
+  color: string;
+  data: ProgramMember[];
+}
 
 export default function MemberDirectoryScreen() {
   const navigation = useNavigation<NavigationProp>();
@@ -61,6 +67,51 @@ export default function MemberDirectoryScreen() {
     fetchMembers();
   }, [fetchMembers]);
 
+  // Group members into sections
+  const sections = useMemo((): MemberSection[] => {
+    const superAdmins: ProgramMember[] = [];
+    const owners: ProgramMember[] = [];
+    const regularMembers: ProgramMember[] = [];
+
+    members.forEach(member => {
+      if (member.isSuperAdmin) {
+        superAdmins.push(member);
+      } else if (member.isOwner) {
+        owners.push(member);
+      } else {
+        regularMembers.push(member);
+      }
+    });
+
+    const result: MemberSection[] = [];
+
+    if (superAdmins.length > 0) {
+      result.push({
+        title: 'Super Admin',
+        color: '#FFD700', // Gold
+        data: superAdmins,
+      });
+    }
+
+    if (owners.length > 0) {
+      result.push({
+        title: 'Program Owner',
+        color: '#E74C3C', // Red
+        data: owners,
+      });
+    }
+
+    if (regularMembers.length > 0) {
+      result.push({
+        title: 'Members',
+        color: colors.textMuted,
+        data: regularMembers,
+      });
+    }
+
+    return result;
+  }, [members]);
+
   const handleMemberPress = (member: ProgramMember) => {
     navigation.navigate('MemberProfile', {
       programId,
@@ -73,20 +124,18 @@ export default function MemberDirectoryScreen() {
   const AWAY_TIMEOUT_SECONDS = 30;
   
   const getStatusColor = (member: ProgramMember) => {
-    // Offline users are always gray
     if (!member.isOnline) {
-      return colors.offline; // Use proper offline color
+      return colors.offline;
     }
     
-    // For online users, check activity
     const lastSeen = new Date(member.lastSeenAt);
     const now = new Date();
     const diffSeconds = (now.getTime() - lastSeen.getTime()) / 1000;
     
     if (diffSeconds < AWAY_TIMEOUT_SECONDS) {
-      return colors.online; // Online (green)
+      return colors.online;
     }
-    return colors.idle; // Away (yellow) - logged in but inactive
+    return colors.idle;
   };
 
   const getAvatarColor = (name: string) => {
@@ -126,8 +175,8 @@ export default function MemberDirectoryScreen() {
             <Text style={styles.memberName} numberOfLines={1}>
               {item.nickname || item.displayName}
             </Text>
-            {item.isOwner && <Text style={styles.ownerBadge}>👑</Text>}
-            {item.isSuperAdmin && !item.isOwner && <Text style={styles.adminBadge}>⭐</Text>}
+            {item.isSuperAdmin && <Text style={styles.superAdminBadge}>⭐</Text>}
+            {item.isOwner && !item.isSuperAdmin && <Text style={styles.ownerBadge}>👑</Text>}
           </View>
           
           {highestRole && highestRole.name !== '@everyone' && (
@@ -144,6 +193,17 @@ export default function MemberDirectoryScreen() {
       </TouchableOpacity>
     );
   };
+
+  const renderSectionHeader = ({ section }: { section: MemberSection }) => (
+    <View style={[styles.sectionHeader, { borderLeftColor: section.color }]}>
+      <Text style={[styles.sectionTitle, { color: section.color }]}>
+        {section.title}
+      </Text>
+      <Text style={styles.sectionCount}>
+        {section.data.length}
+      </Text>
+    </View>
+  );
 
   if (isLoading) {
     return (
@@ -167,10 +227,12 @@ export default function MemberDirectoryScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <FlatList
-        data={members}
+      <SectionList
+        sections={sections}
         keyExtractor={(item) => item.id}
         renderItem={renderMember}
+        renderSectionHeader={renderSectionHeader}
+        stickySectionHeadersEnabled={false}
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl
@@ -249,12 +311,31 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     fontWeight: typography.fontWeight.semibold,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    padding: spacing.md,
+    borderLeftWidth: 4,
+    marginTop: spacing.sm,
+  },
+  sectionTitle: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.bold,
+    textTransform: 'uppercase',
+  },
+  sectionCount: {
+    fontSize: typography.fontSize.sm,
+    color: colors.textMuted,
+  },
   memberItem: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+    backgroundColor: colors.background,
   },
   avatarContainer: {
     position: 'relative',
@@ -295,11 +376,11 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginRight: spacing.xs,
   },
-  ownerBadge: {
+  superAdminBadge: {
     fontSize: 14,
     marginLeft: spacing.xs,
   },
-  adminBadge: {
+  ownerBadge: {
     fontSize: 14,
     marginLeft: spacing.xs,
   },

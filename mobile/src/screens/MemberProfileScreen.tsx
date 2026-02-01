@@ -14,15 +14,18 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRoute, RouteProp } from '@react-navigation/native';
+import { useRoute, RouteProp, useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { colors, spacing, typography, borderRadius } from '../constants/theme';
 import { RootStackParamList, ProgramMember } from '../types';
 import { programApi } from '../services/api';
 
+type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type RouteProps = RouteProp<RootStackParamList, 'MemberProfile'>;
 
 export default function MemberProfileScreen() {
+  const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteProps>();
   const { programId, memberId } = route.params;
 
@@ -181,7 +184,19 @@ export default function MemberProfileScreen() {
 
         {/* Roles Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Roles</Text>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Roles</Text>
+            <TouchableOpacity
+              style={styles.assignRolesButton}
+              onPress={() => navigation.navigate('AssignRoles', {
+                programId,
+                memberId,
+                memberName: member.displayName,
+              })}
+            >
+              <Text style={styles.assignRolesText}>Manage</Text>
+            </TouchableOpacity>
+          </View>
           <View style={styles.rolesContainer}>
             {member.roles.length === 0 ? (
               <Text style={styles.noRolesText}>No roles assigned</Text>
@@ -359,12 +374,28 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.md,
+  },
   sectionTitle: {
     fontSize: typography.fontSize.sm,
     fontWeight: typography.fontWeight.semibold,
     color: colors.textMuted,
     textTransform: 'uppercase',
-    marginBottom: spacing.md,
+  },
+  assignRolesButton: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+  },
+  assignRolesText: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.white,
   },
   rolesContainer: {
     flexDirection: 'row',

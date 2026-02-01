@@ -3,6 +3,7 @@ import authRoutes from './auth.routes';
 import userRoutes from './user.routes';
 import programRoutes from './program.routes';
 import channelRoutes from './channel.routes';
+import roleRoutes from './role.routes';
 
 const router = Router();
 
@@ -11,6 +12,9 @@ router.use('/auth', authRoutes);
 
 // User routes
 router.use('/users', userRoutes);
+
+// Role routes (nested under programs) - MUST be before programRoutes to avoid /:id catching role paths
+router.use('/programs', roleRoutes);
 
 // Program routes
 router.use('/programs', programRoutes);
@@ -28,6 +32,7 @@ router.get('/', (req, res) => {
       users: '/api/users',
       programs: '/api/programs',
       channels: '/api/channels',
+      roles: '/api/programs/:programId/roles',
     },
   });
 });

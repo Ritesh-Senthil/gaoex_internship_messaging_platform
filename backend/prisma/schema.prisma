@@ -123,13 +123,19 @@ model ProgramMembership {
   @@index([programId])
 }
 
+// Role tiers determine hierarchy (lower tier number = more authority)
+// Tier 0: Owner - Full control, one per program (assigned to program owner)
+// Tier 1: Admin - Can manage tiers 2-3, all permissions except ADMINISTRATOR
+// Tier 2: Moderator - Can manage tier 3, channel + member permissions
+// Tier 3: Member - Cannot manage roles, basic permissions only
 model Role {
   id            String   @id @default(uuid())
   programId     String
   program       Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
   name          String
   color         String   @default("#99AAB5")  // Default Discord gray
-  position      Int      @default(0)
+  tier          Int      @default(3)          // 0=Owner, 1=Admin, 2=Moderator, 3=Member
+  position      Int      @default(0)          // Deprecated - kept for backwards compat
   permissions   BigInt   @default(0)
   isHoisted     Boolean  @default(false)
   isMentionable Boolean  @default(false)
@@ -143,7 +149,7 @@ model Role {
 
   @@unique([programId, name])
   @@index([programId])
-  @@index([position])
+  @@index([tier])
 }
 
 model MemberRole {
