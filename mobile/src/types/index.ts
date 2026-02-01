@@ -136,6 +136,13 @@ export interface Channel {
 // MESSAGE TYPES
 // ============================================
 
+export interface MessageReaction {
+  emoji: string;
+  count: number;
+  users: { id: string; displayName: string }[];
+  hasReacted?: boolean;
+}
+
 export interface Message {
   id: string;
   content: string;
@@ -153,6 +160,7 @@ export interface Message {
   isEdited: boolean;
   isPinned: boolean;
   attachments: Attachment[];
+  reactions?: MessageReaction[];
   createdAt: string;
   updatedAt: string;
 }
@@ -172,21 +180,39 @@ export interface Attachment {
 export interface Conversation {
   id: string;
   isGroup: boolean;
+  name: string;
+  avatarUrl: string | null;
+  isOnline: boolean;
+  lastSeenAt?: string;
   participants: ConversationParticipant[];
-  lastMessage: Message | null;
+  lastMessage: {
+    id: string;
+    content: string;
+    authorId: string;
+    authorName: string;
+    createdAt: string;
+  } | null;
   unreadCount: number;
+  updatedAt: string;
 }
 
 export interface ConversationParticipant {
-  id: string;
   userId: string;
-  user: {
-    id: string;
-    displayName: string;
-    avatarUrl: string | null;
-  };
-  isMuted: boolean;
-  lastReadAt: string;
+  displayName: string;
+  avatarUrl: string | null;
+  isOnline: boolean;
+}
+
+export interface DMMessage {
+  id: string;
+  content: string;
+  authorId: string;
+  authorName: string;
+  authorAvatar: string | null;
+  isEdited: boolean;
+  reactions?: MessageReaction[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ============================================
@@ -256,7 +282,8 @@ export type RootStackParamList = {
   RoleDetail: { programId: string; roleId: string; roleName: string };
   CreateRole: { programId: string };
   AssignRoles: { programId: string; memberId: string; memberName: string };
-  DirectMessage: { conversationId: string };
+  Conversation: { conversationId: string; name: string };
+  NewConversation: undefined;
   UserProfile: { userId: string };
   Settings: undefined;
   JoinProgram: undefined;

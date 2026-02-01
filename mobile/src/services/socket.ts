@@ -4,7 +4,7 @@
 
 import { io, Socket } from 'socket.io-client';
 import { API_CONFIG } from '../constants/config';
-import { Message } from '../types';
+import { Message, DMMessage } from '../types';
 
 let socket: Socket | null = null;
 let authenticatedUserId: string | null = null;
@@ -131,6 +131,15 @@ export function sendTypingStop(channelId: string, userId: string): void {
   s.emit('typing_stop', { channelId, userId });
 }
 
+// Reaction data type
+export interface ReactionEventData {
+  messageId: string;
+  channelId?: string;
+  conversationId?: string;
+  emoji: string;
+  user: { id: string; displayName: string };
+}
+
 // Event listener types
 export interface SocketEventHandlers {
   onNewMessage?: (message: Message) => void;
@@ -138,6 +147,8 @@ export interface SocketEventHandlers {
   onMessageDeleted?: (data: { messageId: string; channelId: string }) => void;
   onUserTyping?: (data: { channelId: string; userId: string }) => void;
   onUserStoppedTyping?: (data: { channelId: string; userId: string }) => void;
+  onReactionAdded?: (data: ReactionEventData) => void;
+  onReactionRemoved?: (data: ReactionEventData) => void;
 }
 
 /**
@@ -161,6 +172,12 @@ export function subscribeToChannelEvents(handlers: SocketEventHandlers): () => v
   if (handlers.onUserStoppedTyping) {
     s.on('user_stopped_typing', handlers.onUserStoppedTyping);
   }
+  if (handlers.onReactionAdded) {
+    s.on('reaction_added', handlers.onReactionAdded);
+  }
+  if (handlers.onReactionRemoved) {
+    s.on('reaction_removed', handlers.onReactionRemoved);
+  }
 
   // Return cleanup function
   return () => {
@@ -179,6 +196,121 @@ export function subscribeToChannelEvents(handlers: SocketEventHandlers): () => v
     if (handlers.onUserStoppedTyping) {
       s.off('user_stopped_typing', handlers.onUserStoppedTyping);
     }
+    if (handlers.onReactionAdded) {
+      s.off('reaction_added', handlers.onReactionAdded);
+    }
+    if (handlers.onReactionRemoved) {
+      s.off('reaction_removed', handlers.onReactionRemoved);
+    }
+  };
+}
+
+// ============================================
+// CONVERSATION (DM) EVENTS
+// ============================================
+
+/**
+ * Join a conversation room for real-time updates
+ */
+export function joinConversation(conversationId: string): void {
+  const s = getSocket();
+  s.emit('join_conversation', conversationId);
+}
+
+/**
+ * Leave a conversation room
+ */
+export function leaveConversation(conversationId: string): void {
+  const s = getSocket();
+  s.emit('leave_conversation', conversationId);
+}
+
+/**
+ * Broadcast a DM message to other participants
+ */
+export function broadcastDMMessage(conversationId: string, message: DMMessage): void {
+  const s = getSocket();
+  s.emit('dm_message', { conversationId, message });
+}
+
+/**
+ * Send typing indicator for DM
+ */
+export function sendDMTypingStart(conversationId: string, userId: string): void {
+  const s = getSocket();
+  s.emit('typing_start', { conversationId, userId });
+}
+
+/**
+ * Stop typing indicator for DM
+ */
+export function sendDMTypingStop(conversationId: string, userId: string): void {
+  const s = getSocket();
+  s.emit('typing_stop', { conversationId, userId });
+}
+
+// DM Event listener types
+export interface DMSocketEventHandlers {
+  onNewDMMessage?: (data: { conversationId: string; message: DMMessage }) => void;
+  onDMMessageUpdated?: (data: { conversationId: string; message: DMMessage }) => void;
+  onDMMessageDeleted?: (data: { conversationId: string; messageId: string }) => void;
+  onUserTyping?: (data: { conversationId: string; userId: string }) => void;
+  onUserStoppedTyping?: (data: { conversationId: string; userId: string }) => void;
+  onReactionAdded?: (data: ReactionEventData) => void;
+  onReactionRemoved?: (data: ReactionEventData) => void;
+}
+
+/**
+ * Subscribe to DM events
+ */
+export function subscribeToConversationEvents(handlers: DMSocketEventHandlers): () => void {
+  const s = getSocket();
+
+  if (handlers.onNewDMMessage) {
+    s.on('new_dm_message', handlers.onNewDMMessage);
+  }
+  if (handlers.onDMMessageUpdated) {
+    s.on('dm_message_updated', handlers.onDMMessageUpdated);
+  }
+  if (handlers.onDMMessageDeleted) {
+    s.on('dm_message_deleted', handlers.onDMMessageDeleted);
+  }
+  if (handlers.onUserTyping) {
+    s.on('user_typing', handlers.onUserTyping);
+  }
+  if (handlers.onUserStoppedTyping) {
+    s.on('user_stopped_typing', handlers.onUserStoppedTyping);
+  }
+  if (handlers.onReactionAdded) {
+    s.on('reaction_added', handlers.onReactionAdded);
+  }
+  if (handlers.onReactionRemoved) {
+    s.on('reaction_removed', handlers.onReactionRemoved);
+  }
+
+  // Return cleanup function
+  return () => {
+    if (handlers.onNewDMMessage) {
+      s.off('new_dm_message', handlers.onNewDMMessage);
+    }
+    if (handlers.onDMMessageUpdated) {
+      s.off('dm_message_updated', handlers.onDMMessageUpdated);
+    }
+    if (handlers.onDMMessageDeleted) {
+      s.off('dm_message_deleted', handlers.onDMMessageDeleted);
+    }
+    if (handlers.onUserTyping) {
+      s.off('user_typing', handlers.onUserTyping);
+    }
+    if (handlers.onUserStoppedTyping) {
+      s.off('user_stopped_typing', handlers.onUserStoppedTyping);
+    }
+    if (handlers.onReactionAdded) {
+      s.off('reaction_added', handlers.onReactionAdded);
+    }
+    if (handlers.onReactionRemoved) {
+      s.off('reaction_removed', handlers.onReactionRemoved);
+    }
   };
 }
 
@@ -195,4 +327,10 @@ export default {
   sendTypingStart,
   sendTypingStop,
   subscribeToChannelEvents,
+  joinConversation,
+  leaveConversation,
+  broadcastDMMessage,
+  sendDMTypingStart,
+  sendDMTypingStop,
+  subscribeToConversationEvents,
 };

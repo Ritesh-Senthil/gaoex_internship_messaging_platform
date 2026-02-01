@@ -41,6 +41,7 @@ model User {
   reviewedReports         Report[]                @relation("ReportReviewer")
   createdChannels         Channel[]               @relation("ChannelCreator")
   userPermissionOverrides PermissionOverride[]    @relation("UserOverride")
+  reactions               MessageReaction[]
 
   @@unique([authProvider, authProviderId])
   @@index([email])
@@ -301,11 +302,26 @@ model Message {
   // Relations
   attachments Attachment[]
   reports     Report[]
+  reactions   MessageReaction[]
 
   @@index([channelId, createdAt])
   @@index([conversationId, createdAt])
   @@index([authorId])
   @@index([isPinned])
+}
+
+model MessageReaction {
+  id        String   @id @default(uuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emoji     String   // e.g., "👍", "❤️", "😂"
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@index([userId])
 }
 
 model Attachment {

@@ -5,7 +5,7 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { API_CONFIG, APP_CONFIG } from '../constants/config';
-import { ApiResponse, AuthTokens, User, Program, ProgramDetail, Message, Channel, ProgramMember, Role, RoleDetail, Permission } from '../types';
+import { ApiResponse, AuthTokens, User, Program, ProgramDetail, Message, Channel, ProgramMember, Role, RoleDetail, Permission, Conversation, DMMessage } from '../types';
 
 // Create axios instance
 const api: AxiosInstance = axios.create({
@@ -187,6 +187,14 @@ export const userApi = {
    */
   async getUser(userId: string): Promise<ApiResponse<{ user: User }>> {
     const response = await api.get(`/users/${userId}`);
+    return response.data;
+  },
+
+  /**
+   * Search users by name or email
+   */
+  async searchUsers(query: string): Promise<ApiResponse<{ users: Array<{ id: string; displayName: string; email: string; avatarUrl: string | null }> }>> {
+    const response = await api.get(`/users/search?q=${encodeURIComponent(query)}`);
     return response.data;
   },
 };
@@ -412,6 +420,131 @@ export const roleApi = {
    */
   async getPermissions(): Promise<ApiResponse<{ permissions: Permission[] }>> {
     const response = await api.get(`/programs/permissions`);
+    return response.data;
+  },
+};
+
+// ============================================
+// CONVERSATION API
+// ============================================
+
+export const conversationApi = {
+  /**
+   * Get all conversations for current user
+   */
+  async getConversations(): Promise<ApiResponse<{ conversations: Conversation[] }>> {
+    const response = await api.get('/conversations');
+    return response.data;
+  },
+
+  /**
+   * Create a new conversation
+   */
+  async createConversation(participantIds: string[]): Promise<ApiResponse<{ conversation: Conversation; isExisting: boolean }>> {
+    const response = await api.post('/conversations', { participantIds });
+    return response.data;
+  },
+
+  /**
+   * Get a single conversation
+   */
+  async getConversation(conversationId: string): Promise<ApiResponse<{ conversation: Conversation }>> {
+    const response = await api.get(`/conversations/${conversationId}`);
+    return response.data;
+  },
+
+  /**
+   * Get messages for a conversation
+   */
+  async getMessages(conversationId: string, limit = 50, before?: string): Promise<ApiResponse<{ messages: DMMessage[]; hasMore: boolean }>> {
+    const params = new URLSearchParams({ limit: limit.toString() });
+    if (before) params.append('before', before);
+    const response = await api.get(`/conversations/${conversationId}/messages?${params}`);
+    return response.data;
+  },
+
+  /**
+   * Send a message in a conversation
+   */
+  async sendMessage(conversationId: string, content: string): Promise<ApiResponse<{ message: DMMessage }>> {
+    const response = await api.post(`/conversations/${conversationId}/messages`, { content });
+    return response.data;
+  },
+
+  /**
+   * Mark conversation as read
+   */
+  async markAsRead(conversationId: string): Promise<ApiResponse<void>> {
+    const response = await api.post(`/conversations/${conversationId}/read`);
+    return response.data;
+  },
+
+  /**
+   * Delete/leave a conversation
+   */
+  async deleteConversation(conversationId: string): Promise<ApiResponse<void>> {
+    const response = await api.delete(`/conversations/${conversationId}`);
+    return response.data;
+  },
+
+  /**
+   * Edit a message in a conversation
+   */
+  async editMessage(conversationId: string, messageId: string, content: string): Promise<ApiResponse<{ message: DMMessage }>> {
+    const response = await api.patch(`/conversations/${conversationId}/messages/${messageId}`, { content });
+    return response.data;
+  },
+
+  /**
+   * Delete a message in a conversation
+   */
+  async deleteMessage(conversationId: string, messageId: string): Promise<ApiResponse<void>> {
+    const response = await api.delete(`/conversations/${conversationId}/messages/${messageId}`);
+    return response.data;
+  },
+};
+
+// ============================================
+// REACTION API
+// ============================================
+
+export interface ReactionData {
+  emoji: string;
+  count: number;
+  users: { id: string; displayName: string }[];
+  hasReacted?: boolean;
+}
+
+export const reactionApi = {
+  /**
+   * Get reactions for a message
+   */
+  async getReactions(messageId: string): Promise<ApiResponse<{ reactions: ReactionData[] }>> {
+    const response = await api.get(`/messages/${messageId}/reactions`);
+    return response.data;
+  },
+
+  /**
+   * Add a reaction to a message
+   */
+  async addReaction(messageId: string, emoji: string): Promise<ApiResponse<{ reaction: any }>> {
+    const response = await api.post(`/messages/${messageId}/reactions`, { emoji });
+    return response.data;
+  },
+
+  /**
+   * Remove a reaction from a message
+   */
+  async removeReaction(messageId: string, emoji: string): Promise<ApiResponse<void>> {
+    const response = await api.delete(`/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`);
+    return response.data;
+  },
+
+  /**
+   * Get common reaction emojis
+   */
+  async getCommonEmojis(): Promise<ApiResponse<{ emojis: string[] }>> {
+    const response = await api.get('/messages/reactions/common');
     return response.data;
   },
 };

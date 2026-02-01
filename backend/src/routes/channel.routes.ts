@@ -122,11 +122,36 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
             fileSize: true,
           },
         },
+        reactions: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                displayName: true,
+              },
+            },
+          },
+        },
       },
     });
 
-    // Reverse to get chronological order
-    const orderedMessages = messages.reverse();
+    // Reverse to get chronological order and format reactions
+    const orderedMessages = messages.reverse().map((msg) => {
+      // Group reactions by emoji
+      const groupedReactions = msg.reactions.reduce((acc: Record<string, { emoji: string; count: number; users: { id: string; displayName: string }[] }>, r) => {
+        if (!acc[r.emoji]) {
+          acc[r.emoji] = { emoji: r.emoji, count: 0, users: [] };
+        }
+        acc[r.emoji].count++;
+        acc[r.emoji].users.push({ id: r.user.id, displayName: r.user.displayName });
+        return acc;
+      }, {});
+
+      return {
+        ...msg,
+        reactions: Object.values(groupedReactions),
+      };
+    });
 
     res.json({
       success: true,

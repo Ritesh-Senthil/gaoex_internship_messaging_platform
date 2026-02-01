@@ -135,6 +135,28 @@ io.on('connection', (socket) => {
     console.log(`Socket ${socket.id} left channel:${channelId}`);
   });
 
+  // Join conversation (DM) room
+  socket.on('join_conversation', (conversationId: string) => {
+    socket.join(`conversation:${conversationId}`);
+    console.log(`Socket ${socket.id} joined conversation:${conversationId}`);
+  });
+
+  // Leave conversation room
+  socket.on('leave_conversation', (conversationId: string) => {
+    socket.leave(`conversation:${conversationId}`);
+    console.log(`Socket ${socket.id} left conversation:${conversationId}`);
+  });
+
+  // Send DM message - broadcast to other participants
+  socket.on('dm_message', async (data: { conversationId: string; message: any }) => {
+    // Broadcast to all participants in the conversation room except sender
+    socket.to(`conversation:${data.conversationId}`).emit('new_dm_message', {
+      conversationId: data.conversationId,
+      message: data.message,
+    });
+    console.log(`DM message broadcast to conversation:${data.conversationId}`);
+  });
+
   // Typing indicators
   socket.on('typing_start', (data: { channelId?: string; conversationId?: string; userId: string }) => {
     const room = data.channelId ? `channel:${data.channelId}` : `conversation:${data.conversationId}`;

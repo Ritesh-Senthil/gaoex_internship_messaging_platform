@@ -29,6 +29,11 @@ import {
   leaveChannel,
   subscribeToChannelEvents,
 } from '../services/socket';
+import MarkdownText from '../components/MarkdownText';
+import MessageActions from '../components/MessageActions';
+import ReactionBar, { Reaction } from '../components/ReactionBar';
+import ReactionPicker from '../components/ReactionPicker';
+import { reactionApi } from '../services/api';
 
 type RouteProps = RouteProp<RootStackParamList, 'Channel'>;
 
@@ -44,8 +49,21 @@ export default function ChannelScreen() {
   const [hasMore, setHasMore] = useState(true);
   const [messageText, setMessageText] = useState('');
   const [error, setError] = useState<string | null>(null);
+  
+  // Edit mode state
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const [editText, setEditText] = useState('');
+  
+  // Action sheet state
+  const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
+  const [showActions, setShowActions] = useState(false);
+  
+  // Reaction picker state
+  const [showReactionPicker, setShowReactionPicker] = useState(false);
+  const [reactionTargetMessage, setReactionTargetMessage] = useState<Message | null>(null);
 
   const flatListRef = useRef<FlatList>(null);
+  const inputRef = useRef<TextInput>(null);
 
   const fetchMessages = useCallback(async (loadMore = false) => {
     try {
@@ -118,6 +136,57 @@ export default function ChannelScreen() {
           setMessages(prev => prev.filter(m => m.id !== data.messageId));
         }
       },
+      onReactionAdded: (data) => {
+        // Skip if it's our own reaction (already handled optimistically)
+        if (data.channelId === channelId && data.user.id !== user?.id) {
+          setMessages(prev => prev.map(msg => {
+            if (msg.id !== data.messageId) return msg;
+            const reactions = msg.reactions || [];
+            const existingReaction = reactions.find(r => r.emoji === data.emoji);
+            if (existingReaction) {
+              // Add user to existing reaction
+              if (!existingReaction.users?.some(u => u.id === data.user.id)) {
+                return {
+                  ...msg,
+                  reactions: reactions.map(r => 
+                    r.emoji === data.emoji 
+                      ? { ...r, count: r.count + 1, users: [...(r.users || []), data.user] }
+                      : r
+                  ),
+                };
+              }
+              return msg;
+            }
+            // Add new reaction
+            return {
+              ...msg,
+              reactions: [...reactions, { emoji: data.emoji, count: 1, users: [data.user] }],
+            };
+          }));
+        }
+      },
+      onReactionRemoved: (data) => {
+        // Skip if it's our own reaction (already handled optimistically)
+        if (data.channelId === channelId && data.user.id !== user?.id) {
+          setMessages(prev => prev.map(msg => {
+            if (msg.id !== data.messageId) return msg;
+            const reactions = msg.reactions || [];
+            return {
+              ...msg,
+              reactions: reactions
+                .map(r => {
+                  if (r.emoji !== data.emoji) return r;
+                  return {
+                    ...r,
+                    count: r.count - 1,
+                    users: (r.users || []).filter(u => u.id !== data.user.id),
+                  };
+                })
+                .filter(r => r.count > 0),
+            };
+          }));
+        }
+      },
     });
 
     // Cleanup on unmount
@@ -154,26 +223,140 @@ export default function ChannelScreen() {
     }
   };
 
-  const handleDeleteMessage = async (messageId: string) => {
-    Alert.alert(
-      'Delete Message',
-      'Are you sure you want to delete this message?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await channelApi.deleteMessage(channelId, messageId);
-              setMessages(prev => prev.filter(m => m.id !== messageId));
-            } catch (err: any) {
-              Alert.alert('Error', err.message || 'Failed to delete message');
+  const handleMessagePress = (message: Message) => {
+    setSelectedMessage(message);
+    setShowActions(true);
+  };
+
+  const handleCloseActions = () => {
+    setShowActions(false);
+    setSelectedMessage(null);
+  };
+
+  const handleEditMessage = () => {
+    if (selectedMessage) {
+      setEditingMessage(selectedMessage);
+      setEditText(selectedMessage.content);
+      setShowActions(false);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessage(null);
+    setEditText('');
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingMessage || !editText.trim()) return;
+
+    try {
+      const response = await channelApi.editMessage(channelId, editingMessage.id, editText.trim());
+      if (response.success) {
+        setMessages(prev => prev.map(m => m.id === editingMessage.id ? response.data.message : m));
+        setEditingMessage(null);
+        setEditText('');
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to edit message');
+    }
+  };
+
+  const handleDeleteMessage = async () => {
+    if (!selectedMessage) return;
+    
+    try {
+      await channelApi.deleteMessage(channelId, selectedMessage.id);
+      setMessages(prev => prev.filter(m => m.id !== selectedMessage.id));
+      setSelectedMessage(null);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to delete message');
+    }
+  };
+
+  const handleOpenReactionPicker = (message?: Message) => {
+    const targetMessage = message || selectedMessage;
+    if (targetMessage) {
+      setReactionTargetMessage(targetMessage);
+      setShowReactionPicker(true);
+      setShowActions(false);
+    }
+  };
+
+  const handleAddReaction = async (emoji: string) => {
+    if (!reactionTargetMessage) return;
+    
+    try {
+      await reactionApi.addReaction(reactionTargetMessage.id, emoji);
+      
+      // Update local state
+      setMessages(prev => prev.map(m => {
+        if (m.id === reactionTargetMessage.id) {
+          const existingReaction = m.reactions?.find(r => r.emoji === emoji);
+          if (existingReaction) {
+            return {
+              ...m,
+              reactions: m.reactions?.map(r => 
+                r.emoji === emoji 
+                  ? { ...r, count: r.count + 1, users: [...r.users, { id: user!.id, displayName: user!.displayName }] }
+                  : r
+              ),
+            };
+          } else {
+            return {
+              ...m,
+              reactions: [...(m.reactions || []), { emoji, count: 1, users: [{ id: user!.id, displayName: user!.displayName }] }],
+            };
+          }
+        }
+        return m;
+      }));
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to add reaction');
+    }
+  };
+
+  const handleToggleReaction = async (messageId: string, emoji: string, hasReacted: boolean) => {
+    try {
+      if (hasReacted) {
+        await reactionApi.removeReaction(messageId, emoji);
+        setMessages(prev => prev.map(m => {
+          if (m.id === messageId) {
+            return {
+              ...m,
+              reactions: m.reactions?.map(r => {
+                if (r.emoji === emoji) {
+                  const newUsers = r.users.filter(u => u.id !== user?.id);
+                  return { ...r, count: r.count - 1, users: newUsers };
+                }
+                return r;
+              }).filter(r => r.count > 0),
+            };
+          }
+          return m;
+        }));
+      } else {
+        await reactionApi.addReaction(messageId, emoji);
+        setMessages(prev => prev.map(m => {
+          if (m.id === messageId) {
+            const existingReaction = m.reactions?.find(r => r.emoji === emoji);
+            if (existingReaction) {
+              return {
+                ...m,
+                reactions: m.reactions?.map(r =>
+                  r.emoji === emoji
+                    ? { ...r, count: r.count + 1, users: [...r.users, { id: user!.id, displayName: user!.displayName }] }
+                    : r
+                ),
+              };
             }
-          },
-        },
-      ]
-    );
+          }
+          return m;
+        }));
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to update reaction');
+    }
   };
 
   const formatTime = (dateString: string) => {
@@ -203,11 +386,13 @@ export default function ChannelScreen() {
       prevMessage.author.id !== item.author.id ||
       new Date(item.createdAt).getTime() - new Date(prevMessage.createdAt).getTime() > 5 * 60 * 1000;
 
+    const isEditing = editingMessage?.id === item.id;
+
     return (
       <TouchableOpacity
-        style={styles.messageContainer}
-        onLongPress={() => isOwn && handleDeleteMessage(item.id)}
-        delayLongPress={500}
+        style={[styles.messageContainer, isEditing && styles.messageContainerEditing]}
+        onLongPress={() => handleMessagePress(item)}
+        delayLongPress={300}
         activeOpacity={0.8}
       >
         {showHeader && (
@@ -224,8 +409,46 @@ export default function ChannelScreen() {
           </View>
         )}
         <View style={[styles.messageContent, !showHeader && styles.messageContentContinued]}>
-          <Text style={styles.messageText}>{item.content}</Text>
-          {item.isEdited && <Text style={styles.editedLabel}>(edited)</Text>}
+          {isEditing ? (
+            <View style={styles.editContainer}>
+              <TextInput
+                ref={inputRef}
+                style={styles.editInput}
+                value={editText}
+                onChangeText={setEditText}
+                multiline
+                autoFocus
+              />
+              <View style={styles.editActions}>
+                <TouchableOpacity onPress={handleCancelEdit} style={styles.editButton}>
+                  <Text style={styles.editButtonTextCancel}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={handleSaveEdit} style={[styles.editButton, styles.editButtonSave]}>
+                  <Text style={styles.editButtonTextSave}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <>
+              <MarkdownText
+                style={styles.messageText}
+                mentionedUsers={item.mentionedUsers}
+                mentionedRoles={item.mentionedRoles}
+                mentionEveryone={item.mentionEveryone}
+              >
+                {item.content}
+              </MarkdownText>
+              {item.isEdited && <Text style={styles.editedLabel}>(edited)</Text>}
+              {(item.reactions && item.reactions.length > 0) && (
+                <ReactionBar
+                  reactions={item.reactions}
+                  currentUserId={user?.id}
+                  onReactionPress={(emoji, hasReacted) => handleToggleReaction(item.id, emoji, hasReacted)}
+                  onAddReaction={() => handleOpenReactionPicker(item)}
+                />
+              )}
+            </>
+          )}
         </View>
       </TouchableOpacity>
     );
@@ -306,34 +529,57 @@ export default function ChannelScreen() {
         />
 
         {/* Message Input */}
-        <View style={styles.inputContainer}>
-          <TextInput
-            style={styles.input}
-            placeholder={`Message #${channelName}`}
-            placeholderTextColor={colors.textMuted}
-            value={messageText}
-            onChangeText={setMessageText}
-            multiline
-            maxLength={4000}
-            returnKeyType="default"
-            blurOnSubmit={false}
-          />
-          <TouchableOpacity
-            style={[
-              styles.sendButton,
-              (!messageText.trim() || isSending) && styles.sendButtonDisabled,
-            ]}
-            onPress={handleSendMessage}
-            disabled={!messageText.trim() || isSending}
-          >
-            {isSending ? (
-              <ActivityIndicator size="small" color={colors.white} />
-            ) : (
-              <Text style={styles.sendButtonText}>→</Text>
-            )}
-          </TouchableOpacity>
-        </View>
+        {!editingMessage && (
+          <View style={styles.inputContainer}>
+            <TextInput
+              style={styles.input}
+              placeholder={`Message #${channelName}`}
+              placeholderTextColor={colors.textMuted}
+              value={messageText}
+              onChangeText={setMessageText}
+              multiline
+              maxLength={4000}
+              returnKeyType="default"
+              blurOnSubmit={false}
+            />
+            <TouchableOpacity
+              style={[
+                styles.sendButton,
+                (!messageText.trim() || isSending) && styles.sendButtonDisabled,
+              ]}
+              onPress={handleSendMessage}
+              disabled={!messageText.trim() || isSending}
+            >
+              {isSending ? (
+                <ActivityIndicator size="small" color={colors.white} />
+              ) : (
+                <Text style={styles.sendButtonText}>→</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
       </KeyboardAvoidingView>
+
+      {/* Message Actions Sheet */}
+      <MessageActions
+        visible={showActions}
+        onClose={handleCloseActions}
+        messageContent={selectedMessage?.content || ''}
+        isOwnMessage={selectedMessage?.author.id === user?.id}
+        onEdit={handleEditMessage}
+        onDelete={handleDeleteMessage}
+        onReact={() => handleOpenReactionPicker()}
+      />
+
+      {/* Reaction Picker */}
+      <ReactionPicker
+        visible={showReactionPicker}
+        onClose={() => {
+          setShowReactionPicker(false);
+          setReactionTargetMessage(null);
+        }}
+        onSelectEmoji={handleAddReaction}
+      />
     </SafeAreaView>
   );
 }
@@ -415,6 +661,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
+  messageContainerEditing: {
+    backgroundColor: colors.primary + '10',
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary,
+  },
   messageHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -464,6 +715,42 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSize.xs,
     color: colors.textMuted,
     marginTop: 2,
+  },
+  editContainer: {
+    flex: 1,
+  },
+  editInput: {
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.md,
+    padding: spacing.sm,
+    fontSize: typography.fontSize.md,
+    color: colors.text,
+    minHeight: 40,
+    maxHeight: 100,
+  },
+  editActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: spacing.xs,
+    gap: spacing.sm,
+  },
+  editButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+  },
+  editButtonSave: {
+    backgroundColor: colors.primary,
+  },
+  editButtonTextCancel: {
+    color: colors.textMuted,
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.medium,
+  },
+  editButtonTextSave: {
+    color: colors.white,
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.medium,
   },
   inputContainer: {
     flexDirection: 'row',

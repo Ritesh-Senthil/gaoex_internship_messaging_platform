@@ -27,22 +27,15 @@ import RolesListScreen from '../screens/RolesListScreen';
 import RoleDetailScreen from '../screens/RoleDetailScreen';
 import CreateRoleScreen from '../screens/CreateRoleScreen';
 import AssignRolesScreen from '../screens/AssignRolesScreen';
+import ConversationsListScreen from '../screens/ConversationsListScreen';
+import ConversationScreen from '../screens/ConversationScreen';
+import NewConversationScreen from '../screens/NewConversationScreen';
 
 // Create navigators
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
 // Placeholder screens
-function DirectMessagesScreen() {
-  return (
-    <View style={styles.placeholder}>
-      <Text style={styles.placeholderText}>💬</Text>
-      <Text style={styles.placeholderTitle}>Direct Messages</Text>
-      <Text style={styles.placeholderSubtitle}>Coming soon</Text>
-    </View>
-  );
-}
-
 function NotificationsScreen() {
   return (
     <View style={styles.placeholder}>
@@ -141,7 +134,7 @@ function MainTabs() {
       />
       <Tab.Screen
         name="DirectMessages"
-        component={DirectMessagesScreen}
+        component={ConversationsListScreen}
         options={{
           tabBarLabel: 'Messages',
           tabBarIcon: ({ color, size }) => (
@@ -300,6 +293,28 @@ export default function AppNavigator() {
                 title: 'Assign Roles',
                 presentation: 'modal',
               })}
+            />
+            <Stack.Screen
+              name="Conversation"
+              component={ConversationScreen}
+              options={({ route }) => ({
+                headerShown: true,
+                headerStyle: { backgroundColor: colors.backgroundSecondary },
+                headerTintColor: colors.text,
+                headerTitleStyle: { fontWeight: '600' },
+                title: route.params?.name || 'Conversation',
+              })}
+            />
+            <Stack.Screen
+              name="NewConversation"
+              component={NewConversationScreen}
+              options={{
+                headerShown: true,
+                headerStyle: { backgroundColor: colors.backgroundSecondary },
+                headerTintColor: colors.text,
+                title: 'New Message',
+                presentation: 'modal',
+              }}
             />
           </>
         )}

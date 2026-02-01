@@ -109,6 +109,48 @@ router.patch('/me', authenticate, async (req: Request, res: Response, next: Next
 });
 
 /**
+ * GET /api/users/search
+ * Search users by name or email
+ * NOTE: Must be defined BEFORE /:id to avoid route conflict
+ */
+router.get('/search', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { q, limit = 20 } = req.query;
+
+    if (!q || typeof q !== 'string') {
+      return res.json({
+        success: true,
+        data: { users: [] },
+      });
+    }
+
+    const users = await prisma.user.findMany({
+      where: {
+        OR: [
+          { displayName: { contains: q, mode: 'insensitive' } },
+          { email: { contains: q, mode: 'insensitive' } },
+        ],
+        isActive: true,
+      },
+      select: {
+        id: true,
+        displayName: true,
+        email: true,
+        avatarUrl: true,
+      },
+      take: Math.min(Number(limit), 50),
+    });
+
+    res.json({
+      success: true,
+      data: { users },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /api/users/:id
  * Get user by ID (public profile)
  */
@@ -134,46 +176,6 @@ router.get('/:id', authenticate, async (req: Request, res: Response, next: NextF
     res.json({
       success: true,
       data: { user },
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * GET /api/users/search
- * Search users by name
- */
-router.get('/search', authenticate, async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { q, limit = 20 } = req.query;
-
-    if (!q || typeof q !== 'string') {
-      return res.json({
-        success: true,
-        data: { users: [] },
-      });
-    }
-
-    const users = await prisma.user.findMany({
-      where: {
-        OR: [
-          { displayName: { contains: q, mode: 'insensitive' } },
-          { email: { contains: q, mode: 'insensitive' } },
-        ],
-        isActive: true,
-      },
-      select: {
-        id: true,
-        displayName: true,
-        avatarUrl: true,
-      },
-      take: Math.min(Number(limit), 50),
-    });
-
-    res.json({
-      success: true,
-      data: { users },
     });
   } catch (error) {
     next(error);
