@@ -88,8 +88,28 @@ app.use(errorHandler);
 // Socket.io Events
 // ===================
 
+// Track socket -> userId mapping for disconnect handling
+const socketUserMap = new Map<string, string>();
+
 io.on('connection', (socket) => {
   console.log(`Socket connected: ${socket.id}`);
+
+  // User authentication - associate socket with user
+  socket.on('authenticate', async (userId: string) => {
+    socketUserMap.set(socket.id, userId);
+    console.log(`Socket ${socket.id} authenticated as user ${userId}`);
+    
+    // Mark user as online
+    try {
+      await prisma.user.update({
+        where: { id: userId },
+        data: { isOnline: true, lastSeenAt: new Date() },
+      });
+      console.log(`User ${userId} marked online via socket`);
+    } catch (error) {
+      console.error(`Failed to mark user online:`, error);
+    }
+  });
 
   // Join program room
   socket.on('join_program', (programId: string) => {
@@ -126,8 +146,37 @@ io.on('connection', (socket) => {
     socket.to(room).emit('user_stopped_typing', data);
   });
 
-  socket.on('disconnect', () => {
-    console.log(`Socket disconnected: ${socket.id}`);
+  // Handle disconnect - mark user offline (handles force-quit, network loss, etc.)
+  socket.on('disconnect', async () => {
+    const userId = socketUserMap.get(socket.id);
+    console.log(`Socket disconnected: ${socket.id} (user: ${userId || 'unknown'})`);
+    
+    if (userId) {
+      socketUserMap.delete(socket.id);
+      
+      // Check if user has any other active sockets (multiple devices)
+      const hasOtherSockets = Array.from(socketUserMap.values()).includes(userId);
+      
+      if (!hasOtherSockets) {
+        // No other connections - mark user offline after short delay
+        // (to handle brief disconnections during network switches)
+        setTimeout(async () => {
+          // Double-check no new connection was made
+          const stillNoSockets = !Array.from(socketUserMap.values()).includes(userId);
+          if (stillNoSockets) {
+            try {
+              await prisma.user.update({
+                where: { id: userId },
+                data: { isOnline: false, lastSeenAt: new Date() },
+              });
+              console.log(`User ${userId} marked offline (socket disconnected)`);
+            } catch (error) {
+              console.error(`Failed to mark user offline:`, error);
+            }
+          }
+        }, 5000); // 5 second grace period
+      }
+    }
   });
 });
 

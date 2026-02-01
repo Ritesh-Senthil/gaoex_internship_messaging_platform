@@ -105,6 +105,15 @@ export default function ProgramDetailScreen() {
     }
   };
 
+  const handleMembersPress = () => {
+    if (program) {
+      navigation.navigate('MemberDirectory', {
+        programId: program.id,
+        programName: program.name,
+      });
+    }
+  };
+
   const renderChannel = (channel: Channel) => (
     <TouchableOpacity
       key={channel.id}
@@ -191,9 +200,11 @@ export default function ProgramDetailScreen() {
           </View>
           <View style={styles.programInfo}>
             <Text style={styles.programName}>{program.name}</Text>
-            <Text style={styles.programMeta}>
-              {program._count.memberships} members
-            </Text>
+            <TouchableOpacity onPress={handleMembersPress}>
+              <Text style={styles.programMetaLink}>
+                👥 {program._count.memberships} members
+              </Text>
+            </TouchableOpacity>
           </View>
           <TouchableOpacity style={styles.inviteButton} onPress={handleInvitePress}>
             <Text style={styles.inviteButtonText}>Invite</Text>
@@ -307,6 +318,11 @@ const styles = StyleSheet.create({
   programMeta: {
     fontSize: typography.fontSize.sm,
     color: colors.textSecondary,
+    marginTop: spacing.xs,
+  },
+  programMetaLink: {
+    fontSize: typography.fontSize.sm,
+    color: colors.primary,
     marginTop: spacing.xs,
   },
   inviteButton: {

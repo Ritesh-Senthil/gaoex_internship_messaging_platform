@@ -158,15 +158,25 @@ export interface ConversationParticipant {
 export interface ProgramMember {
   id: string;
   userId: string;
-  user: {
-    id: string;
-    displayName: string;
-    avatarUrl: string | null;
-    lastSeenAt: string;
-  };
+  displayName: string;
+  email: string;
+  avatarUrl: string | null;
+  isOnline: boolean;
+  lastSeenAt: string;
+  isSuperAdmin: boolean;
+  isOwner: boolean;
   nickname: string | null;
-  roles: Role[];
+  roles: MemberRole[];
   joinedAt: string;
+  accountCreatedAt?: string;
+}
+
+export interface MemberRole {
+  id: string;
+  name: string;
+  color: string;
+  position: number;
+  isHoisted?: boolean;
 }
 
 // ============================================
@@ -202,6 +212,8 @@ export type RootStackParamList = {
   Main: undefined;
   ProgramDetail: { programId: string };
   Channel: { channelId: string; channelName: string };
+  MemberDirectory: { programId: string; programName: string };
+  MemberProfile: { programId: string; memberId: string; memberName: string };
   DirectMessage: { conversationId: string };
   UserProfile: { userId: string };
   Settings: undefined;

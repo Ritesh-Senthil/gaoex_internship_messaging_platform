@@ -5,7 +5,7 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { API_CONFIG, APP_CONFIG } from '../constants/config';
-import { ApiResponse, AuthTokens, User, Program, ProgramDetail, Message, Channel } from '../types';
+import { ApiResponse, AuthTokens, User, Program, ProgramDetail, Message, Channel, ProgramMember } from '../types';
 
 // Create axios instance
 const api: AxiosInstance = axios.create({
@@ -237,6 +237,22 @@ export const programApi = {
    */
   async regenerateInviteCode(programId: string): Promise<ApiResponse<{ inviteCode: string }>> {
     const response = await api.post(`/programs/${programId}/invite/regenerate`);
+    return response.data;
+  },
+
+  /**
+   * Get all members of a program
+   */
+  async getMembers(programId: string): Promise<ApiResponse<{ members: ProgramMember[] }>> {
+    const response = await api.get(`/programs/${programId}/members`);
+    return response.data;
+  },
+
+  /**
+   * Get a specific member's profile
+   */
+  async getMember(programId: string, memberId: string): Promise<ApiResponse<{ member: ProgramMember }>> {
+    const response = await api.get(`/programs/${programId}/members/${memberId}`);
     return response.data;
   },
 };

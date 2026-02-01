@@ -9,6 +9,7 @@ import { User, AuthTokens } from '../types';
 import { APP_CONFIG } from '../constants/config';
 import { authApi, loadTokens, clearTokens, userApi } from '../services/api';
 import { getIdToken, signOut as firebaseSignOut } from '../services/firebase';
+import { authenticateSocket, clearSocketAuth, disconnectSocket } from '../services/socket';
 
 interface AuthState {
   // State
@@ -50,6 +51,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           const response = await userApi.getMe();
           
           if (response.success) {
+            // Authenticate socket for online/offline tracking
+            authenticateSocket(response.data.user.id);
+            
             set({
               user: response.data.user,
               isAuthenticated: true,
@@ -105,6 +109,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           JSON.stringify(response.data.user)
         );
         
+        // Authenticate socket for online/offline tracking
+        authenticateSocket(response.data.user.id);
+        
         set({
           user: response.data.user,
           isAuthenticated: true,
@@ -132,6 +139,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       set({ isLoading: true });
       
+      // Clear socket auth and disconnect
+      clearSocketAuth();
+      disconnectSocket();
+      
       // Logout from our backend
       await authApi.logout();
       
@@ -149,6 +160,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (error) {
       console.error('Logout failed:', error);
       // Even if logout fails, clear local state
+      clearSocketAuth();
+      disconnectSocket();
       set({
         user: null,
         isAuthenticated: false,

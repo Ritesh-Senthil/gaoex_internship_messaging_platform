@@ -458,6 +458,186 @@ router.post('/join', authenticate, async (req: Request, res: Response, next: Nex
 });
 
 /**
+ * GET /api/programs/:id/members
+ * Get all members of a program
+ */
+router.get('/:id/members', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user!.id;
+
+    // Check membership
+    const membership = await prisma.programMembership.findUnique({
+      where: {
+        userId_programId: { userId, programId: id },
+      },
+    });
+
+    if (!membership && !req.user!.isSuperAdmin) {
+      throw new ForbiddenError('You are not a member of this program');
+    }
+
+    const memberships = await prisma.programMembership.findMany({
+      where: { programId: id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            displayName: true,
+            email: true,
+            avatarUrl: true,
+            isOnline: true,
+            lastSeenAt: true,
+            isSuperAdmin: true,
+          },
+        },
+        memberRoles: {
+          include: {
+            role: {
+              select: {
+                id: true,
+                name: true,
+                color: true,
+                position: true,
+                isHoisted: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: {
+        joinedAt: 'asc',
+      },
+    });
+
+    // Get the program to check owner
+    const program = await prisma.program.findUnique({
+      where: { id },
+      select: { ownerId: true },
+    });
+
+    const members = memberships.map(m => ({
+      id: m.id,
+      userId: m.user.id,
+      displayName: m.user.displayName,
+      email: m.user.email,
+      avatarUrl: m.user.avatarUrl,
+      isOnline: m.user.isOnline,
+      lastSeenAt: m.user.lastSeenAt,
+      isSuperAdmin: m.user.isSuperAdmin,
+      isOwner: program?.ownerId === m.user.id,
+      nickname: m.nickname,
+      roles: m.memberRoles
+        .map(mr => mr.role)
+        .sort((a, b) => b.position - a.position),
+      joinedAt: m.joinedAt,
+    }));
+
+    // Sort by highest role position, then by name
+    members.sort((a, b) => {
+      const aMaxPos = Math.max(...a.roles.map(r => r.position), 0);
+      const bMaxPos = Math.max(...b.roles.map(r => r.position), 0);
+      if (bMaxPos !== aMaxPos) return bMaxPos - aMaxPos;
+      return a.displayName.localeCompare(b.displayName);
+    });
+
+    res.json({
+      success: true,
+      data: { members },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/programs/:id/members/:memberId
+ * Get a specific member's profile in a program
+ */
+router.get('/:id/members/:memberId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id, memberId } = req.params;
+    const userId = req.user!.id;
+
+    // Check membership
+    const myMembership = await prisma.programMembership.findUnique({
+      where: {
+        userId_programId: { userId, programId: id },
+      },
+    });
+
+    if (!myMembership && !req.user!.isSuperAdmin) {
+      throw new ForbiddenError('You are not a member of this program');
+    }
+
+    const membership = await prisma.programMembership.findUnique({
+      where: { id: memberId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            displayName: true,
+            email: true,
+            avatarUrl: true,
+            isOnline: true,
+            lastSeenAt: true,
+            isSuperAdmin: true,
+            createdAt: true,
+          },
+        },
+        memberRoles: {
+          include: {
+            role: {
+              select: {
+                id: true,
+                name: true,
+                color: true,
+                position: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!membership || membership.programId !== id) {
+      throw new NotFoundError('Member not found in this program');
+    }
+
+    // Get the program to check owner
+    const program = await prisma.program.findUnique({
+      where: { id },
+      select: { ownerId: true },
+    });
+
+    const member = {
+      id: membership.id,
+      userId: membership.user.id,
+      displayName: membership.user.displayName,
+      email: membership.user.email,
+      avatarUrl: membership.user.avatarUrl,
+      isOnline: membership.user.isOnline,
+      lastSeenAt: membership.user.lastSeenAt,
+      isSuperAdmin: membership.user.isSuperAdmin,
+      isOwner: program?.ownerId === membership.user.id,
+      accountCreatedAt: membership.user.createdAt,
+      nickname: membership.nickname,
+      roles: membership.memberRoles
+        .map(mr => mr.role)
+        .sort((a, b) => b.position - a.position),
+      joinedAt: membership.joinedAt,
+    };
+
+    res.json({
+      success: true,
+      data: { member },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /api/programs/:id/invite/regenerate
  * Regenerate invite code
  */

@@ -81,6 +81,7 @@ router.post('/firebase', async (req: Request, res: Response, next: NextFunction)
             authProvider,
             authProviderId: firebaseUid,
             avatarUrl: picture || existingEmailUser.avatarUrl,
+            isOnline: true,
             lastSeenAt: new Date(),
           },
         });
@@ -95,6 +96,8 @@ router.post('/firebase', async (req: Request, res: Response, next: NextFunction)
             avatarUrl: picture,
             authProvider,
             authProviderId: firebaseUid,
+            isOnline: true,
+            lastSeenAt: new Date(),
           },
         });
 
@@ -102,10 +105,11 @@ router.post('/firebase', async (req: Request, res: Response, next: NextFunction)
         await joinDefaultProgram(user.id);
       }
     } else {
-      // Update existing user
+      // Update existing user - mark as online
       user = await prisma.user.update({
         where: { id: user.id },
         data: {
+          isOnline: true,
           lastSeenAt: new Date(),
           // Update avatar if changed
           ...(picture && { avatarUrl: picture }),
@@ -184,17 +188,43 @@ router.post('/refresh', async (req: Request, res: Response, next: NextFunction) 
 
 /**
  * POST /api/auth/logout
- * Invalidate refresh token
+ * Invalidate refresh token and mark user as offline
  */
 router.post('/logout', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { refreshToken } = req.body;
 
+    console.log('[Logout] Received refreshToken:', refreshToken ? 'YES (length: ' + refreshToken.length + ')' : 'NO');
+
     if (refreshToken) {
+      // Find the refresh token to get the user ID
+      const tokenRecord = await prisma.refreshToken.findFirst({
+        where: { token: refreshToken },
+        select: { userId: true, user: { select: { email: true } } },
+      });
+
+      console.log('[Logout] Token record found:', tokenRecord ? tokenRecord.user?.email : 'NOT FOUND');
+
       // Delete refresh token from database
-      await prisma.refreshToken.deleteMany({
+      const deleted = await prisma.refreshToken.deleteMany({
         where: { token: refreshToken },
       });
+
+      console.log('[Logout] Tokens deleted:', deleted.count);
+
+      // Mark user as offline
+      if (tokenRecord?.userId) {
+        await prisma.user.update({
+          where: { id: tokenRecord.userId },
+          data: { 
+            isOnline: false,
+            lastSeenAt: new Date(),
+          },
+        });
+        console.log('[Logout] User marked offline:', tokenRecord.user?.email);
+      }
+    } else {
+      console.log('[Logout] No refresh token provided - cannot mark user offline');
     }
 
     res.json({

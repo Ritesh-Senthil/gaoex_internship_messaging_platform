@@ -20,6 +20,9 @@ import ProgramsScreen from '../screens/ProgramsScreen';
 import ProgramDetailScreen from '../screens/ProgramDetailScreen';
 import ChannelScreen from '../screens/ChannelScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import JoinProgramScreen from '../screens/JoinProgramScreen';
+import MemberDirectoryScreen from '../screens/MemberDirectoryScreen';
+import MemberProfileScreen from '../screens/MemberProfileScreen';
 
 // Create navigators
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -46,13 +49,57 @@ function NotificationsScreen() {
   );
 }
 
-function JoinProgramScreen() {
+
+/**
+ * Profile Tab Icon - Shows user's initial in a circular avatar
+ */
+function ProfileTabIcon({ focused, size }: { focused: boolean; size: number }) {
+  const { user } = useAuthStore();
+  const initial = user?.displayName?.charAt(0).toUpperCase() || '?';
+  
   return (
-    <View style={styles.placeholder}>
-      <Text style={styles.placeholderText}>➕</Text>
-      <Text style={styles.placeholderTitle}>Join Program</Text>
-      <Text style={styles.placeholderSubtitle}>Coming soon</Text>
+    <View
+      style={{
+        width: size + 4,
+        height: size + 4,
+        borderRadius: (size + 4) / 2,
+        backgroundColor: focused ? colors.primary : colors.surface,
+        borderWidth: focused ? 2 : 1,
+        borderColor: focused ? colors.primary : colors.textMuted,
+        justifyContent: 'center',
+        alignItems: 'center',
+      }}
+    >
+      <Text
+        style={{
+          fontSize: size * 0.55,
+          fontWeight: '700',
+          color: focused ? colors.white : colors.textMuted,
+        }}
+      >
+        {initial}
+      </Text>
     </View>
+  );
+}
+
+/**
+ * Profile Tab Label - Shows user's first name
+ */
+function ProfileTabLabel({ focused }: { focused: boolean }) {
+  const { user } = useAuthStore();
+  const firstName = user?.displayName?.split(' ')[0] || 'Profile';
+  
+  return (
+    <Text
+      style={{
+        fontSize: 12,
+        fontWeight: '500',
+        color: focused ? colors.primary : colors.textMuted,
+      }}
+    >
+      {firstName}
+    </Text>
   );
 }
 
@@ -111,8 +158,9 @@ function MainTabs() {
         name="Profile"
         component={ProfileScreen}
         options={{
-          tabBarIcon: ({ color, size }) => (
-            <Text style={{ fontSize: size, color }}>👤</Text>
+          tabBarLabel: ({ focused }) => <ProfileTabLabel focused={focused} />,
+          tabBarIcon: ({ focused, size }) => (
+            <ProfileTabIcon focused={focused} size={size} />
           ),
         }}
       />
@@ -182,6 +230,28 @@ export default function AppNavigator() {
                 title: 'Join Program',
                 presentation: 'modal',
               }}
+            />
+            <Stack.Screen
+              name="MemberDirectory"
+              component={MemberDirectoryScreen}
+              options={({ route }) => ({
+                headerShown: true,
+                headerStyle: { backgroundColor: colors.backgroundSecondary },
+                headerTintColor: colors.text,
+                headerTitleStyle: { fontWeight: '600' },
+                title: 'Members',
+              })}
+            />
+            <Stack.Screen
+              name="MemberProfile"
+              component={MemberProfileScreen}
+              options={({ route }) => ({
+                headerShown: true,
+                headerStyle: { backgroundColor: colors.backgroundSecondary },
+                headerTintColor: colors.text,
+                headerTitleStyle: { fontWeight: '600' },
+                title: route.params?.memberName || 'Profile',
+              })}
             />
           </>
         )}

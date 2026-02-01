@@ -7,6 +7,7 @@ import { API_CONFIG } from '../constants/config';
 import { Message } from '../types';
 
 let socket: Socket | null = null;
+let authenticatedUserId: string | null = null;
 
 /**
  * Initialize socket connection
@@ -26,6 +27,10 @@ export function initializeSocket(): Socket {
 
   socket.on('connect', () => {
     console.log('Socket connected:', socket?.id);
+    // Re-authenticate on reconnect
+    if (authenticatedUserId) {
+      socket?.emit('authenticate', authenticatedUserId);
+    }
   });
 
   socket.on('disconnect', (reason) => {
@@ -37,6 +42,25 @@ export function initializeSocket(): Socket {
   });
 
   return socket;
+}
+
+/**
+ * Authenticate socket with user ID (for online/offline tracking)
+ */
+export function authenticateSocket(userId: string): void {
+  authenticatedUserId = userId;
+  const s = getSocket();
+  if (s.connected) {
+    s.emit('authenticate', userId);
+    console.log('Socket authenticated for user:', userId);
+  }
+}
+
+/**
+ * Clear socket authentication (on logout)
+ */
+export function clearSocketAuth(): void {
+  authenticatedUserId = null;
 }
 
 /**
@@ -162,6 +186,8 @@ export default {
   initializeSocket,
   getSocket,
   disconnectSocket,
+  authenticateSocket,
+  clearSocketAuth,
   joinChannel,
   leaveChannel,
   joinProgram,
