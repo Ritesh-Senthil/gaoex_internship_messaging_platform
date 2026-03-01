@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InternHub — Product Overview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --blue: #0A84FF;
+    --blue-dark: #0066CC;
+    --gold: #FFD700;
+    --gold-muted: #C9A84C;
+    --black: #000000;
+    --dark: #0A0A0F;
+    --dark-card: #111118;
+    --dark-surface: #1A1A24;
+    --text: #FFFFFF;
+    --text-secondary: #A0A4B0;
+    --green: #30D158;
+    --red: #FF453A;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--black);
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+
+  /* ===== HERO ===== */
+  .hero {
+    text-align: center;
+    padding: 80px 20px 60px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -100px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(10,132,255,0.12) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, var(--gold), var(--gold-muted));
+    color: var(--black);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    padding: 6px 18px;
+    border-radius: 100px;
+    margin-bottom: 28px;
+  }
+
+  .hero h1 {
+    font-size: 56px;
+    font-weight: 900;
+    letter-spacing: -1.5px;
+    line-height: 1.1;
+    margin-bottom: 12px;
+  }
+
+  .hero h1 span {
+    background: linear-gradient(135deg, var(--blue), #409CFF);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero-tagline {
+    font-size: 22px;
+    font-weight: 300;
+    color: var(--text-secondary);
+    max-width: 540px;
+    margin: 0 auto 40px;
+    line-height: 1.5;
+  }
+
+  .hero-stats {
+    display: flex;
+    justify-content: center;
+    gap: 48px;
+    flex-wrap: wrap;
+  }
+
+  .hero-stat {
+    text-align: center;
+  }
+
+  .hero-stat .number {
+    font-size: 36px;
+    font-weight: 800;
+    color: var(--gold);
+    line-height: 1.2;
+  }
+
+  .hero-stat .label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 2px;
+  }
+
+  /* ===== DIVIDER ===== */
+  .divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+    margin: 0 auto;
+    max-width: 700px;
+  }
+
+  /* ===== SECTION ===== */
+  .section {
+    padding: 64px 0;
+  }
+
+  .section-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--blue);
+    margin-bottom: 12px;
+  }
+
+  .section-title {
+    font-size: 36px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    line-height: 1.2;
+    margin-bottom: 16px;
+  }
+
+  .section-subtitle {
+    font-size: 17px;
+    color: var(--text-secondary);
+    max-width: 600px;
+    line-height: 1.6;
+  }
+
+  /* ===== PROBLEM / SOLUTION ===== */
+  .problem-solution {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-top: 40px;
+  }
+
+  .ps-card {
+    padding: 32px;
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .ps-card.problem {
+    background: linear-gradient(135deg, rgba(255,69,58,0.06), rgba(255,69,58,0.02));
+    border-color: rgba(255,69,58,0.15);
+  }
+
+  .ps-card.solution {
+    background: linear-gradient(135deg, rgba(48,209,88,0.06), rgba(48,209,88,0.02));
+    border-color: rgba(48,209,88,0.15);
+  }
+
+  .ps-icon {
+    font-size: 32px;
+    margin-bottom: 16px;
+  }
+
+  .ps-card h3 {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+
+  .ps-card.problem h3 { color: var(--red); }
+  .ps-card.solution h3 { color: var(--green); }
+
+  .ps-card ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  .ps-card ul li {
+    font-size: 14px;
+    color: var(--text-secondary);
+    padding: 5px 0;
+    padding-left: 20px;
+    position: relative;
+  }
+
+  .ps-card.problem ul li::before {
+    content: '✕';
+    position: absolute;
+    left: 0;
+    color: var(--red);
+    font-weight: 700;
+    font-size: 11px;
+    top: 7px;
+  }
+
+  .ps-card.solution ul li::before {
+    content: '✓';
+    position: absolute;
+    left: 0;
+    color: var(--green);
+    font-weight: 700;
+    font-size: 12px;
+    top: 5px;
+  }
+
+  /* ===== FEATURES GRID ===== */
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    margin-top: 40px;
+  }
+
+  .feature-card {
+    background: var(--dark-card);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 16px;
+    padding: 28px 24px;
+    transition: transform 0.2s, border-color 0.2s;
+  }
+
+  .feature-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(10,132,255,0.2);
+  }
+
+  .feature-icon {
+    font-size: 28px;
+    margin-bottom: 14px;
+    display: block;
+  }
+
+  .feature-card h3 {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .feature-card p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  /* ===== HIGHLIGHT FEATURES ===== */
+  .highlight-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-top: 24px;
+  }
+
+  .highlight-card {
+    background: var(--dark-card);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 20px;
+    padding: 36px 32px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .highlight-card::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 200px;
+    height: 200px;
+    background: radial-gradient(circle at top right, rgba(10,132,255,0.06), transparent 70%);
+    pointer-events: none;
+  }
+
+  .highlight-card .feature-icon {
+    font-size: 36px;
+    margin-bottom: 18px;
+  }
+
+  .highlight-card h3 {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 10px;
+  }
+
+  .highlight-card p {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+  }
+
+  /* ===== PERMISSIONS SECTION ===== */
+  .perm-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-top: 32px;
+  }
+
+  .perm-tier {
+    text-align: center;
+    padding: 24px 16px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.05);
+    background: var(--dark-card);
+  }
+
+  .perm-tier .tier-icon {
+    font-size: 28px;
+    margin-bottom: 10px;
+    display: block;
+  }
+
+  .perm-tier h4 {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  .perm-tier p {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+
+  .perm-tier.owner { border-color: rgba(255,215,0,0.2); }
+  .perm-tier.owner h4 { color: var(--gold); }
+  .perm-tier.admin { border-color: rgba(231,76,60,0.2); }
+  .perm-tier.admin h4 { color: #E74C3C; }
+  .perm-tier.mod { border-color: rgba(10,132,255,0.2); }
+  .perm-tier.mod h4 { color: var(--blue); }
+  .perm-tier.member { border-color: rgba(149,165,166,0.2); }
+  .perm-tier.member h4 { color: #95A5A6; }
+
+  /* ===== READY SECTION ===== */
+  .ready-section {
+    text-align: center;
+    padding: 72px 20px;
+    position: relative;
+  }
+
+  .ready-section::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 500px;
+    height: 500px;
+    background: radial-gradient(circle, rgba(255,215,0,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .ready-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(48,209,88,0.1);
+    border: 1px solid rgba(48,209,88,0.25);
+    color: var(--green);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 20px;
+    border-radius: 100px;
+    margin-bottom: 28px;
+  }
+
+  .ready-badge .dot {
+    width: 8px;
+    height: 8px;
+    background: var(--green);
+    border-radius: 50%;
+    display: inline-block;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .ready-section h2 {
+    font-size: 40px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    margin-bottom: 16px;
+  }
+
+  .ready-section p {
+    font-size: 17px;
+    color: var(--text-secondary);
+    max-width: 500px;
+    margin: 0 auto;
+    line-height: 1.6;
+  }
+
+  .built-with {
+    margin-top: 48px;
+    padding-top: 32px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .built-with p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+
+  .built-with .name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  /* ===== FOOTER ===== */
+  .footer {
+    text-align: center;
+    padding: 40px 20px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+  }
+
+  .footer p {
+    font-size: 12px;
+    color: rgba(255,255,255,0.25);
+  }
+
+  /* ===== PRINT ===== */
+  @media print {
+    body { background: #000; }
+    .feature-card:hover { transform: none; }
+    .page { padding: 0 20px; }
+  }
+
+  @media (max-width: 700px) {
+    .hero h1 { font-size: 36px; }
+    .problem-solution { grid-template-columns: 1fr; }
+    .features-grid { grid-template-columns: 1fr 1fr; }
+    .highlight-row { grid-template-columns: 1fr; }
+    .perm-grid { grid-template-columns: 1fr 1fr; }
+    .hero-stats { gap: 32px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <!-- ===== HERO ===== -->
+  <section class="hero">
+    <div class="hero-badge">Built for GAOEX</div>
+    <h1><span>InternHub</span></h1>
+    <p class="hero-tagline">The all-in-one mobile platform where interns and facilitators connect, collaborate, and communicate — in real time.</p>
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <div class="number">20+</div>
+        <div class="label">Screens</div>
+      </div>
+      <div class="hero-stat">
+        <div class="number">60+</div>
+        <div class="label">Features</div>
+      </div>
+      <div class="hero-stat">
+        <div class="number">Real-time</div>
+        <div class="label">Messaging</div>
+      </div>
+      <div class="hero-stat">
+        <div class="number">iOS</div>
+        <div class="label">Native App</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ===== THE PROBLEM ===== -->
+  <section class="section">
+    <div class="section-label">Why It Exists</div>
+    <div class="section-title">Interns deserve better tools.</div>
+    <p class="section-subtitle">Existing platforms aren't built for internship programs. InternHub is.</p>
+
+    <div class="problem-solution">
+      <div class="ps-card problem">
+        <div class="ps-icon">😓</div>
+        <h3>The Problem</h3>
+        <ul>
+          <li>Scattered communication across email, Slack, GroupMe, WhatsApp</li>
+          <li>No structured organization for different programs</li>
+          <li>No role-based access control for facilitators vs. interns</li>
+          <li>Hard to find shared resources and pinned information</li>
+          <li>Generic tools not designed for the internship experience</li>
+        </ul>
+      </div>
+      <div class="ps-card solution">
+        <div class="ps-icon">🚀</div>
+        <h3>The Solution</h3>
+        <ul>
+          <li>One app for everything — messaging, files, announcements</li>
+          <li>Programs with organized channels and categories</li>
+          <li>Facilitators and interns have tailored permissions</li>
+          <li>Pinned messages, search, and shared resources built in</li>
+          <li>Purpose-built for how internship programs actually work</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ===== CORE FEATURES ===== -->
+  <section class="section">
+    <div class="section-label">Core Features</div>
+    <div class="section-title">Everything your program needs.</div>
+    <p class="section-subtitle">A complete communication platform designed from the ground up for internship programs.</p>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <span class="feature-icon">💬</span>
+        <h3>Real-Time Messaging</h3>
+        <p>Instant message delivery with read receipts, typing indicators, and rich text formatting.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">📢</span>
+        <h3>Announcements</h3>
+        <p>Dedicated announcement channels so important updates never get lost in the noise.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">🧵</span>
+        <h3>Threaded Replies</h3>
+        <p>Keep conversations organized with threads. Discuss topics without cluttering the main feed.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">📎</span>
+        <h3>File Sharing</h3>
+        <p>Share documents, images, and resources directly in conversations. Everything stays in context.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">📌</span>
+        <h3>Pinned Messages</h3>
+        <p>Pin important messages for quick reference. Deadlines, links, and resources always at hand.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">🔔</span>
+        <h3>Push Notifications</h3>
+        <p>Never miss a message. Smart notifications with mute controls per channel.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">🔍</span>
+        <h3>Global Search</h3>
+        <p>Find any message, person, or channel instantly. Search across your entire program.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">👤</span>
+        <h3>Rich Profiles</h3>
+        <p>Personal profiles with bio, status, avatar, and role badges. Know who you're working with.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">😀</span>
+        <h3>Reactions & Mentions</h3>
+        <p>React to messages with emojis. @mention teammates to get their attention.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ===== PROGRAMS & ORGANIZATION ===== -->
+  <section class="section">
+    <div class="section-label">Organization</div>
+    <div class="section-title">Structured for how programs run.</div>
+    <p class="section-subtitle">Each internship program is its own space — with channels, roles, and members that make sense.</p>
+
+    <div class="highlight-row">
+      <div class="highlight-card">
+        <span class="feature-icon">🏛️</span>
+        <h3>Programs</h3>
+        <p>Create separate spaces for each internship cohort, department, or initiative. Each program has its own channels, members, and settings. Invite participants with a simple code.</p>
+      </div>
+      <div class="highlight-card">
+        <span class="feature-icon">📂</span>
+        <h3>Channels & Categories</h3>
+        <p>Organize conversations into channels grouped by category — Welcome, General, Resources, or whatever fits your program. Text channels for discussion, announcement channels for updates.</p>
+      </div>
+    </div>
+    <div class="highlight-row" style="margin-top: 0;">
+      <div class="highlight-card">
+        <span class="feature-icon">✉️</span>
+        <h3>Direct & Group Messages</h3>
+        <p>Private 1-on-1 conversations or group chats with up to 8 people. Perfect for mentor check-ins, project teams, or quick questions — with all the same features as channels.</p>
+      </div>
+      <div class="highlight-card">
+        <span class="feature-icon">🔐</span>
+        <h3>Private Channels</h3>
+        <p>Restrict access to specific channels for leadership discussions, sensitive topics, or team-specific spaces. Control exactly who sees what.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ===== ROLES & PERMISSIONS ===== -->
+  <section class="section">
+    <div class="section-label">Access Control</div>
+    <div class="section-title">The right people, the right access.</div>
+    <p class="section-subtitle">A flexible role system that mirrors your actual organizational hierarchy — from program owners to interns.</p>
+
+    <div class="perm-grid">
+      <div class="perm-tier owner">
+        <span class="tier-icon">👑</span>
+        <h4>Owner</h4>
+        <p>Full program control. Settings, members, and structure.</p>
+      </div>
+      <div class="perm-tier admin">
+        <span class="tier-icon">🛡️</span>
+        <h4>Admin</h4>
+        <p>Manage channels, roles, and content moderation.</p>
+      </div>
+      <div class="perm-tier mod">
+        <span class="tier-icon">⚡</span>
+        <h4>Facilitator</h4>
+        <p>Post announcements, manage messages, invite members.</p>
+      </div>
+      <div class="perm-tier member">
+        <span class="tier-icon">👤</span>
+        <h4>Intern</h4>
+        <p>Participate in discussions, share files, and collaborate.</p>
+      </div>
+    </div>
+
+    <div style="text-align: center; margin-top: 28px; color: var(--text-secondary); font-size: 14px;">
+      20 granular permissions &nbsp;·&nbsp; Custom roles with colors &nbsp;·&nbsp; Per-channel overrides
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ===== REAL-TIME ===== -->
+  <section class="section">
+    <div class="section-label">Experience</div>
+    <div class="section-title">Fast. Native. Real-time.</div>
+    <p class="section-subtitle">Built as a native iOS application — not a web wrapper. Every interaction feels instant and responsive.</p>
+
+    <div class="features-grid" style="margin-top: 32px; grid-template-columns: repeat(2, 1fr);">
+      <div class="feature-card">
+        <span class="feature-icon">⚡</span>
+        <h3>Instant Delivery</h3>
+        <p>Messages arrive the moment they're sent. No refreshing, no waiting. Real-time updates for everything — messages, reactions, member changes, typing indicators.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">📱</span>
+        <h3>Native Performance</h3>
+        <p>Smooth 60fps animations, haptic feedback, native gestures. Swipe to reply, long-press for actions, pull to refresh. Feels like the apps your team already loves.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">🌐</span>
+        <h3>Always Connected</h3>
+        <p>Automatic reconnection, offline resilience, and smart syncing. The app handles network changes gracefully so your team stays in the loop.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">🔒</span>
+        <h3>Secure by Design</h3>
+        <p>Google authentication, encrypted token storage, and secure API communication. Your program's conversations stay private and protected.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ===== READY TO DEPLOY ===== -->
+  <section class="ready-section">
+    <div class="ready-badge">
+      <span class="dot"></span>
+      Ready to Deploy
+    </div>
+    <h2>From idea to application.</h2>
+    <p>InternHub is a fully functional, production-grade mobile application — designed, built, and tested end-to-end. Ready to put in the hands of your next cohort.</p>
+
+    <div class="built-with">
+      <p>Designed & Developed for</p>
+      <div class="name" style="font-size: 18px; margin-top: 4px; color: var(--gold);">GAOEX</div>
+    </div>
+  </section>
+
+  <!-- ===== FOOTER ===== -->
+  <div class="footer">
+    <p>InternHub v1.0.0 &nbsp;·&nbsp; Native iOS Application &nbsp;·&nbsp; © 2026</p>
+  </div>
+
+</div>
+
+</body>
+</html>

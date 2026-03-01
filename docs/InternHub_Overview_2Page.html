@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>InternHub — Overview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --blue: #0A84FF;
+    --gold: #FFD700;
+    --gold-muted: #C9A84C;
+    --black: #000000;
+    --card: #111118;
+    --text: #FFFFFF;
+    --text2: #A0A4B0;
+    --green: #30D158;
+    --red: #FF453A;
+  }
+
+  @page { size: 8.5in 11in; margin: 0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body { width: 8.5in; background: var(--black); }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .page {
+    width: 8.5in;
+    height: 11in;
+    padding: 0.55in 0.6in 0.45in;
+    position: relative;
+    overflow: hidden;
+    page-break-after: always;
+    break-after: page;
+    background: var(--black);
+  }
+
+  .page:last-child { page-break-after: avoid; break-after: avoid; }
+
+  .page-num {
+    position: absolute;
+    bottom: 0.35in;
+    right: 0.6in;
+    font-size: 9px;
+    color: rgba(255,255,255,0.18);
+  }
+
+  .page-brand {
+    position: absolute;
+    bottom: 0.35in;
+    left: 0.6in;
+    font-size: 9px;
+    color: rgba(255,255,255,0.18);
+  }
+
+  /* ===== PAGE 1 ===== */
+
+  .hero {
+    text-align: center;
+    padding: 32px 0 28px;
+    position: relative;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -60px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 420px;
+    height: 420px;
+    background: radial-gradient(circle, rgba(10,132,255,0.10) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .badge {
+    display: inline-block;
+    background: linear-gradient(135deg, var(--gold), var(--gold-muted));
+    color: var(--black);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    padding: 4px 14px;
+    border-radius: 100px;
+    margin-bottom: 14px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .hero h1 {
+    font-size: 46px;
+    font-weight: 900;
+    letter-spacing: -1.5px;
+    line-height: 1.05;
+    margin-bottom: 8px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .hero h1 span {
+    background: linear-gradient(135deg, var(--blue), #409CFF);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero-sub {
+    font-size: 15px;
+    font-weight: 300;
+    color: var(--text2);
+    max-width: 420px;
+    margin: 0 auto;
+    line-height: 1.45;
+    position: relative;
+    z-index: 1;
+  }
+
+  .stats-row {
+    display: flex;
+    justify-content: center;
+    gap: 36px;
+    margin-top: 22px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .stat { text-align: center; }
+  .stat .n { font-size: 26px; font-weight: 800; color: var(--gold); line-height: 1.2; }
+  .stat .l { font-size: 9px; font-weight: 500; color: var(--text2); text-transform: uppercase; letter-spacing: 0.8px; margin-top: 1px; }
+
+  .divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent);
+    margin: 20px 0;
+  }
+
+  /* Problem / Solution */
+  .ps-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+
+  .ps {
+    padding: 18px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.05);
+  }
+
+  .ps.prob { background: rgba(255,69,58,0.04); border-color: rgba(255,69,58,0.12); }
+  .ps.sol { background: rgba(48,209,88,0.04); border-color: rgba(48,209,88,0.12); }
+  .ps .ic { font-size: 20px; margin-bottom: 8px; }
+  .ps h3 { font-size: 13px; font-weight: 700; margin-bottom: 7px; }
+  .ps.prob h3 { color: var(--red); }
+  .ps.sol h3 { color: var(--green); }
+  .ps ul { list-style: none; }
+  .ps li { font-size: 11px; color: var(--text2); padding: 2.5px 0 2.5px 16px; position: relative; line-height: 1.4; }
+  .ps.prob li::before { content: '✕'; position: absolute; left: 0; color: var(--red); font-size: 9px; font-weight: 700; top: 3.5px; }
+  .ps.sol li::before { content: '✓'; position: absolute; left: 0; color: var(--green); font-size: 10px; font-weight: 700; top: 2.5px; }
+
+  /* Features */
+  .sec-label { font-size: 9px; font-weight: 700; letter-spacing: 1.8px; text-transform: uppercase; color: var(--blue); margin-bottom: 5px; }
+  .sec-title { font-size: 22px; font-weight: 800; letter-spacing: -0.3px; line-height: 1.15; margin-bottom: 14px; }
+
+  .feat-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+
+  .fc {
+    background: var(--card);
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 10px;
+    padding: 14px 13px;
+  }
+
+  .fc .fi { font-size: 20px; margin-bottom: 6px; display: block; }
+  .fc h3 { font-size: 11.5px; font-weight: 700; margin-bottom: 3px; }
+  .fc p { font-size: 10px; color: var(--text2); line-height: 1.35; }
+
+  /* ===== PAGE 2 ===== */
+
+  .org-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  .oc {
+    background: var(--card);
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 12px;
+    padding: 18px 16px;
+  }
+
+  .oc .fi { font-size: 22px; margin-bottom: 8px; display: block; }
+  .oc h3 { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+  .oc p { font-size: 10.5px; color: var(--text2); line-height: 1.4; }
+
+  /* Roles */
+  .role-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .rt {
+    text-align: center;
+    padding: 14px 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.04);
+    background: var(--card);
+  }
+
+  .rt .ri { font-size: 22px; margin-bottom: 6px; display: block; }
+  .rt h4 { font-size: 12px; font-weight: 700; margin-bottom: 2px; }
+  .rt p { font-size: 9.5px; color: var(--text2); line-height: 1.3; }
+  .rt.o { border-color: rgba(255,215,0,0.18); } .rt.o h4 { color: var(--gold); }
+  .rt.a { border-color: rgba(231,76,60,0.18); } .rt.a h4 { color: #E74C3C; }
+  .rt.f { border-color: rgba(10,132,255,0.18); } .rt.f h4 { color: var(--blue); }
+  .rt.m { border-color: rgba(149,165,166,0.18); } .rt.m h4 { color: #95A5A6; }
+
+  .role-note {
+    text-align: center;
+    font-size: 10px;
+    color: var(--text2);
+    margin-top: 10px;
+  }
+
+  /* Experience */
+  .exp-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .ec {
+    background: var(--card);
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 10px;
+    padding: 14px 12px;
+    text-align: center;
+  }
+
+  .ec .fi { font-size: 20px; margin-bottom: 6px; display: block; }
+  .ec h3 { font-size: 11px; font-weight: 700; margin-bottom: 3px; }
+  .ec p { font-size: 9.5px; color: var(--text2); line-height: 1.3; }
+
+  /* Closing strip */
+  .close-strip {
+    margin-top: 22px;
+    text-align: center;
+    padding: 22px 0 0;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    position: relative;
+  }
+
+  .close-strip::before {
+    content: '';
+    position: absolute;
+    top: -40px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 350px;
+    height: 150px;
+    background: radial-gradient(ellipse, rgba(255,215,0,0.04) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .ready-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(48,209,88,0.08);
+    border: 1px solid rgba(48,209,88,0.2);
+    color: var(--green);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 4px 14px;
+    border-radius: 100px;
+    margin-bottom: 10px;
+  }
+
+  .ready-pill .dot {
+    width: 6px;
+    height: 6px;
+    background: var(--green);
+    border-radius: 50%;
+  }
+
+  .close-strip h2 {
+    font-size: 24px;
+    font-weight: 800;
+    margin-bottom: 6px;
+  }
+
+  .close-strip > p {
+    font-size: 12px;
+    color: var(--text2);
+    max-width: 380px;
+    margin: 0 auto;
+    line-height: 1.5;
+  }
+
+  .gaoex {
+    margin-top: 14px;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--gold);
+  }
+
+  @media print {
+    body { background: #000 !important; }
+    .page { background: #000 !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ==================== PAGE 1 ==================== -->
+<div class="page">
+
+  <div class="hero">
+    <div class="badge">Built for GAOEX</div>
+    <h1><span>InternHub</span></h1>
+    <p class="hero-sub">The all-in-one mobile platform where interns and facilitators connect, collaborate, and communicate — in real time.</p>
+    <div class="stats-row">
+      <div class="stat"><div class="n">20+</div><div class="l">Screens</div></div>
+      <div class="stat"><div class="n">60+</div><div class="l">Features</div></div>
+      <div class="stat"><div class="n">Real-time</div><div class="l">Messaging</div></div>
+      <div class="stat"><div class="n">iOS</div><div class="l">Native App</div></div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="ps-row">
+    <div class="ps prob">
+      <div class="ic">😓</div>
+      <h3>The Problem</h3>
+      <ul>
+        <li>Communication scattered across email, Slack, GroupMe</li>
+        <li>No structured organization for programs</li>
+        <li>No role-based access for facilitators vs. interns</li>
+        <li>Generic tools not built for the internship experience</li>
+      </ul>
+    </div>
+    <div class="ps sol">
+      <div class="ic">🚀</div>
+      <h3>The Solution</h3>
+      <ul>
+        <li>One app — messaging, files, and announcements</li>
+        <li>Programs with organized channels and categories</li>
+        <li>Tailored permissions for every role</li>
+        <li>Purpose-built for how internships actually run</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="sec-label">Core Features</div>
+  <div class="sec-title">Everything your program needs.</div>
+
+  <div class="feat-grid">
+    <div class="fc"><span class="fi">💬</span><h3>Real-Time Chat</h3><p>Instant messaging with rich text, typing indicators, and read status.</p></div>
+    <div class="fc"><span class="fi">📢</span><h3>Announcements</h3><p>Controlled channels where only facilitators can post updates.</p></div>
+    <div class="fc"><span class="fi">🧵</span><h3>Threads</h3><p>Focused conversations branching off any message.</p></div>
+    <div class="fc"><span class="fi">📎</span><h3>File Sharing</h3><p>Documents, images, and media shared in context.</p></div>
+    <div class="fc"><span class="fi">📌</span><h3>Pins & Search</h3><p>Pin key messages. Search across all channels instantly.</p></div>
+    <div class="fc"><span class="fi">🔔</span><h3>Notifications</h3><p>Smart push alerts with per-channel mute controls.</p></div>
+  </div>
+
+  <span class="page-brand">InternHub — Product Overview</span>
+  <span class="page-num">1</span>
+</div>
+
+<!-- ==================== PAGE 2 ==================== -->
+<div class="page">
+
+  <div class="sec-label">Organization</div>
+  <div class="sec-title">Structured for how programs run.</div>
+
+  <div class="org-grid">
+    <div class="oc"><span class="fi">🏛️</span><h3>Programs</h3><p>Separate spaces per cohort or initiative. Own channels, members, settings. Join with a simple invite code.</p></div>
+    <div class="oc"><span class="fi">📂</span><h3>Channels & Categories</h3><p>Conversations organized under categories. Text channels for discussion, announcements for updates.</p></div>
+    <div class="oc"><span class="fi">✉️</span><h3>Direct & Group Messages</h3><p>Private 1:1 or group chats (up to 8). Mentor check-ins, project teams, quick questions.</p></div>
+    <div class="oc"><span class="fi">🔐</span><h3>Private Channels</h3><p>Restricted access for leadership, sensitive topics, or team-only spaces. Full access control.</p></div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="sec-label">Access Control</div>
+  <div class="sec-title">The right people, the right access.</div>
+
+  <div class="role-row">
+    <div class="rt o"><span class="ri">👑</span><h4>Owner</h4><p>Full program control</p></div>
+    <div class="rt a"><span class="ri">🛡️</span><h4>Admin</h4><p>Channels, roles, moderation</p></div>
+    <div class="rt f"><span class="ri">⚡</span><h4>Facilitator</h4><p>Announcements, invites</p></div>
+    <div class="rt m"><span class="ri">👤</span><h4>Intern</h4><p>Discuss, share, collaborate</p></div>
+  </div>
+  <div class="role-note">20 granular permissions · Custom roles · Per-channel overrides</div>
+
+  <div class="divider"></div>
+
+  <div class="sec-label">Experience</div>
+  <div class="sec-title">Fast. Native. Real-time.</div>
+
+  <div class="exp-row">
+    <div class="ec"><span class="fi">⚡</span><h3>Instant</h3><p>Zero-delay message delivery</p></div>
+    <div class="ec"><span class="fi">📱</span><h3>Native</h3><p>60fps, haptics, gestures</p></div>
+    <div class="ec"><span class="fi">🌐</span><h3>Resilient</h3><p>Auto-reconnect, smart sync</p></div>
+    <div class="ec"><span class="fi">🔒</span><h3>Secure</h3><p>Google auth, encrypted tokens</p></div>
+  </div>
+
+  <div class="close-strip">
+    <div class="ready-pill"><span class="dot"></span> Ready to Deploy</div>
+    <h2>From idea to application.</h2>
+    <p>A fully functional, production-grade mobile app — designed, built, and tested end-to-end.</p>
+    <div class="gaoex">GAOEX</div>
+  </div>
+
+  <span class="page-brand">InternHub — Product Overview</span>
+  <span class="page-num">2</span>
+</div>
+
+</body>
+</html>

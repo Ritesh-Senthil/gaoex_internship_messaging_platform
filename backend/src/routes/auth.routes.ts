@@ -1,0 +1,335 @@
+import { Router, Request, Response, NextFunction } from 'express';
+import { prisma } from '../config/database';
+import { verifyFirebaseToken } from '../config/firebase';
+import { generateTokens } from '../utils/jwt';
+import { BadRequestError, UnauthorizedError, ForbiddenError } from '../middleware/errorHandler';
+import { authenticate } from '../middleware/auth';
+import { PermissionPresets } from '../utils/permissions';
+
+const router = Router();
+
+/**
+ * POST /api/auth/firebase
+ * Authenticate user with Firebase ID token
+ * 
+ * The mobile app handles Google/Facebook sign-in via Firebase Auth,
+ * then sends the Firebase ID token to this endpoint.
+ * 
+ * We verify the token, create/update user in our database,
+ * and return our own JWT tokens for API access.
+ */
+router.post('/firebase', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { idToken } = req.body;
+
+    if (!idToken) {
+      throw new BadRequestError('Firebase ID token is required');
+    }
+
+    // Verify Firebase token
+    let firebaseUser;
+    try {
+      firebaseUser = await verifyFirebaseToken(idToken);
+    } catch (error) {
+      console.error('Firebase token verification failed:', error);
+      throw new UnauthorizedError('Invalid or expired Firebase token');
+    }
+
+    // Extract user info from Firebase token
+    const {
+      uid: firebaseUid,
+      email,
+      name,
+      picture,
+      firebase: { sign_in_provider },
+    } = firebaseUser;
+
+    if (!email) {
+      throw new BadRequestError('Email is required. Please use an account with an email address.');
+    }
+
+    // Determine auth provider from Firebase sign-in method
+    let authProvider: 'GOOGLE' | 'FACEBOOK' = 'GOOGLE';
+    if (sign_in_provider === 'facebook.com') {
+      authProvider = 'FACEBOOK';
+    } else if (sign_in_provider === 'google.com') {
+      authProvider = 'GOOGLE';
+    }
+
+    // Find or create user
+    let user = await prisma.user.findUnique({
+      where: {
+        authProvider_authProviderId: {
+          authProvider,
+          authProviderId: firebaseUid,
+        },
+      },
+    });
+
+    let isNewUser = false;
+
+    if (!user) {
+      // Check if user exists with same email but different provider
+      const existingEmailUser = await prisma.user.findUnique({
+        where: { email },
+      });
+
+      if (existingEmailUser) {
+        // Link accounts - update to use Firebase UID
+        user = await prisma.user.update({
+          where: { id: existingEmailUser.id },
+          data: {
+            authProvider,
+            authProviderId: firebaseUid,
+            avatarUrl: picture || existingEmailUser.avatarUrl,
+            isOnline: true,
+            lastSeenAt: new Date(),
+          },
+        });
+      } else {
+        // Create new user
+        isNewUser = true;
+        
+        user = await prisma.user.create({
+          data: {
+            email,
+            displayName: name || email.split('@')[0],
+            avatarUrl: picture,
+            authProvider,
+            authProviderId: firebaseUid,
+            isOnline: true,
+            lastSeenAt: new Date(),
+          },
+        });
+
+        // Auto-join default program
+        await joinDefaultProgram(user.id);
+      }
+    } else {
+      // Update existing user - mark as online
+      // Only update avatar from Google if the user doesn't have a custom-uploaded one
+      // (custom avatars are stored in our Supabase Storage under avatars/ path)
+      const hasCustomAvatar = user.avatarUrl && user.avatarUrl.includes('/avatars/');
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          isOnline: true,
+          lastSeenAt: new Date(),
+          // Only set Google picture if no custom avatar exists
+          ...(!hasCustomAvatar && picture && { avatarUrl: picture }),
+        },
+      });
+    }
+
+    // Generate our own JWT tokens for API access
+    const tokens = await generateTokens(user.id);
+
+    // Clean expired status before returning
+    let statusEmoji = user.statusEmoji;
+    let statusText = user.statusText;
+    let statusExpiresAt = user.statusExpiresAt;
+    if (statusExpiresAt && new Date(statusExpiresAt) < new Date()) {
+      statusEmoji = null;
+      statusText = null;
+      statusExpiresAt = null;
+      // Clear in DB (fire-and-forget)
+      prisma.user.update({
+        where: { id: user.id },
+        data: { statusEmoji: null, statusText: null, statusExpiresAt: null },
+      }).catch(() => {});
+    }
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          displayName: user.displayName,
+          avatarUrl: user.avatarUrl,
+          isSuperAdmin: user.isSuperAdmin,
+          bio: user.bio,
+          bannerColor: user.bannerColor,
+          statusEmoji,
+          statusText,
+          statusExpiresAt,
+          authProvider: user.authProvider,
+          createdAt: user.createdAt,
+        },
+        tokens,
+        isNewUser,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/auth/refresh
+ * Refresh access token using refresh token
+ */
+router.post('/refresh', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      throw new BadRequestError('Refresh token is required');
+    }
+
+    // Check if token exists in database
+    const storedToken = await prisma.refreshToken.findUnique({
+      where: { token: refreshToken },
+      include: { user: true },
+    });
+
+    if (!storedToken || storedToken.expiresAt < new Date()) {
+      // Delete expired token if exists
+      if (storedToken) {
+        await prisma.refreshToken.delete({ where: { id: storedToken.id } });
+      }
+      throw new UnauthorizedError('Invalid or expired refresh token');
+    }
+
+    if (!storedToken.user.isActive) {
+      throw new UnauthorizedError('User account is deactivated');
+    }
+
+    // Delete old refresh token
+    await prisma.refreshToken.delete({
+      where: { id: storedToken.id },
+    });
+
+    // Generate new tokens
+    const tokens = await generateTokens(storedToken.userId);
+
+    res.json({
+      success: true,
+      data: { tokens },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/auth/logout
+ * Invalidate refresh token and mark user as offline
+ */
+router.post('/logout', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { refreshToken } = req.body;
+
+    console.log('[Logout] Received refreshToken:', refreshToken ? 'YES (length: ' + refreshToken.length + ')' : 'NO');
+
+    if (refreshToken) {
+      // Find the refresh token to get the user ID
+      const tokenRecord = await prisma.refreshToken.findFirst({
+        where: { token: refreshToken },
+        select: { userId: true, user: { select: { email: true } } },
+      });
+
+      console.log('[Logout] Token record found:', tokenRecord ? tokenRecord.user?.email : 'NOT FOUND');
+
+      // Delete refresh token from database
+      const deleted = await prisma.refreshToken.deleteMany({
+        where: { token: refreshToken },
+      });
+
+      console.log('[Logout] Tokens deleted:', deleted.count);
+
+      // Mark user as offline
+      if (tokenRecord?.userId) {
+        await prisma.user.update({
+          where: { id: tokenRecord.userId },
+          data: { 
+            isOnline: false,
+            lastSeenAt: new Date(),
+          },
+        });
+        console.log('[Logout] User marked offline:', tokenRecord.user?.email);
+      }
+    } else {
+      console.log('[Logout] No refresh token provided - cannot mark user offline');
+    }
+
+    res.json({
+      success: true,
+      message: 'Logged out successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/auth/logout-all
+ * Invalidate all refresh tokens for a user (logout from all devices)
+ */
+router.post('/logout-all', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requestingUserId = req.user!.id;
+    const { userId } = req.body;
+
+    const targetUserId = userId || requestingUserId;
+
+    // Only allow logging out other users if requester is super admin
+    if (targetUserId !== requestingUserId) {
+      const requester = await prisma.user.findUnique({ where: { id: requestingUserId }, select: { isSuperAdmin: true } });
+      if (!requester?.isSuperAdmin) {
+        throw new ForbiddenError('You can only log out your own sessions');
+      }
+    }
+
+    const result = await prisma.refreshToken.deleteMany({
+      where: { userId: targetUserId },
+    });
+
+    res.json({
+      success: true,
+      message: `Logged out from ${result.count} device(s)`,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Helper: Join user to default program with @everyone role
+ */
+async function joinDefaultProgram(userId: string): Promise<void> {
+  const defaultProgram = await prisma.program.findFirst({
+    where: { isDefault: true },
+    include: {
+      roles: {
+        where: { isEveryone: true },
+      },
+    },
+  });
+
+  if (!defaultProgram) {
+    console.warn('Default program not found. Run the seed script.');
+    return;
+  }
+
+  // Create membership
+  const membership = await prisma.programMembership.create({
+    data: {
+      userId,
+      programId: defaultProgram.id,
+    },
+  });
+
+  // Assign @everyone role
+  const everyoneRole = defaultProgram.roles[0];
+  if (everyoneRole) {
+    await prisma.memberRole.create({
+      data: {
+        membershipId: membership.id,
+        roleId: everyoneRole.id,
+      },
+    });
+  }
+}
+
+export default router;

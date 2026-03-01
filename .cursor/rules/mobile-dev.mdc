@@ -1,0 +1,24 @@
+---
+description: Mobile app development workflow
+globs:
+  - mobile/**/*.tsx
+  - mobile/**/*.ts
+---
+
+# Mobile Development Rules
+
+After making any changes to files in the `mobile/` directory:
+
+1. **Always reload the app** after code changes by running:
+   ```bash
+   xcrun simctl launch --terminate-running-process booted com.internhub.app --url "exp+internhub://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081"
+   ```
+
+2. **Always**, restart Metro bundler with cache clear:
+   ```bash
+   lsof -ti :8081 | xargs kill -9 2>/dev/null
+   cd /Users/ritesh/Documents/Per/Cursor/slack_clone/mobile && npx expo start --dev-client --clear &
+   ```
+   Then wait 5 seconds and relaunch the app.
+
+3. **Always verify** the backend is running on port 3000 before testing mobile features.
