@@ -17,7 +17,7 @@ After making any changes to files in the `mobile/` directory:
 2. **Always**, restart Metro bundler with cache clear:
    ```bash
    lsof -ti :8081 | xargs kill -9 2>/dev/null
-   cd /Users/ritesh/Documents/Per/Cursor/slack_clone/mobile && npx expo start --dev-client --clear &
+   cd mobile && npx expo start --dev-client --clear &
    ```
    Then wait 5 seconds and relaunch the app.
 
