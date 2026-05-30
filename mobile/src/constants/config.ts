@@ -9,11 +9,11 @@ export const API_CONFIG = {
   // For Android emulator: use 10.0.2.2
   BASE_URL: __DEV__ 
     ? 'http://localhost:3000/api'  // Development (simulator)
-    : 'https://your-production-api.com/api', // Production
+    : 'https://gaoexinternshipmessagingplatform-production.up.railway.app/api', // Production
   
   SOCKET_URL: __DEV__
     ? 'http://localhost:3000'
-    : 'https://your-production-api.com',
+    : 'https://gaoexinternshipmessagingplatform-production.up.railway.app',
   
   TIMEOUT: 30000, // 30 seconds
 } as const;
