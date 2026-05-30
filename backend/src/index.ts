@@ -66,10 +66,21 @@ if (config.nodeEnv !== 'test') {
 // Routes
 // ===================
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+// Health check — always returns 200 if the HTTP server is alive, and
+// reports database connectivity separately so a DB outage doesn't take
+// the whole service down (which would surface as a 502 to clients).
+app.get('/health', async (req, res) => {
+  let database = 'disconnected';
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    database = 'connected';
+  } catch {
+    database = 'disconnected';
+  }
+
+  res.json({
+    status: 'ok',
+    database,
     timestamp: new Date().toISOString(),
     environment: config.nodeEnv,
   });
@@ -298,22 +309,35 @@ io.on('connection', (socket) => {
 // Start Server
 // ===================
 
-const startServer = async () => {
+// Attempt to connect to the database, retrying in the background instead of
+// crashing. This keeps the HTTP server (and /health) available even when the
+// database is temporarily unreachable (e.g. a paused/restoring Supabase project).
+const connectDatabaseWithRetry = async (retryDelayMs = 10000): Promise<void> => {
   try {
-    // Test database connection
     await prisma.$connect();
     console.log('✅ Database connected');
-
-    // Start HTTP server
-    httpServer.listen(config.port, () => {
-      console.log(`🚀 Server running on http://localhost:${config.port}`);
-      console.log(`📡 Socket.io ready`);
-      console.log(`🌍 Environment: ${config.nodeEnv}`);
-    });
   } catch (error) {
-    console.error('❌ Failed to start server:', error);
-    process.exit(1);
+    console.error(
+      `❌ Database connection failed, retrying in ${retryDelayMs / 1000}s:`,
+      error instanceof Error ? error.message : error
+    );
+    setTimeout(() => {
+      void connectDatabaseWithRetry(retryDelayMs);
+    }, retryDelayMs);
   }
+};
+
+const startServer = async () => {
+  // Start the HTTP server immediately so the service stays up and can serve
+  // /health even if the database isn't reachable yet.
+  httpServer.listen(config.port, () => {
+    console.log(`🚀 Server running on http://localhost:${config.port}`);
+    console.log(`📡 Socket.io ready`);
+    console.log(`🌍 Environment: ${config.nodeEnv}`);
+  });
+
+  // Connect to the database (non-blocking, retries on failure).
+  void connectDatabaseWithRetry();
 };
 
 // Graceful shutdown
