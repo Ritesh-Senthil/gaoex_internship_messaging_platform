@@ -136,6 +136,8 @@ export const useRoleStore = create<RoleState>((set) => ({
   },
 }));
 
+const EMPTY_ROLES: Role[] = [];
+
 // Selector hooks
-export const useProgramRoles = (programId: string) => 
-  useRoleStore((state) => state.rolesByProgram[programId] || []);
+export const useProgramRoles = (programId: string) =>
+  useRoleStore((state) => state.rolesByProgram[programId] ?? EMPTY_ROLES);

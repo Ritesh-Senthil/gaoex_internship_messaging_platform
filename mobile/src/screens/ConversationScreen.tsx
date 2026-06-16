@@ -22,15 +22,20 @@ import {
   Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRoute, RouteProp, useNavigation } from '@react-navigation/native';
+import { useRoute, RouteProp, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useHeaderHeight } from '@react-navigation/elements';
 import { Ionicons } from '@expo/vector-icons';
 
 import { colors, spacing, typography, borderRadius } from '../constants/theme';
-import { RootStackParamList, DMMessage } from '../types';
+import { CHAT_LIST_PERF_PROPS } from '../constants/listPerf';
+import { RootStackParamList, DMMessage, Attachment } from '../types';
 import { conversationApi, uploadApi, userApi } from '../services/api';
 import { useAuthStore } from '../store/authStore';
 import { useUnreadStore } from '../store/unreadStore';
+import { useConnectionStore } from '../store/connectionStore';
+import { useMessageStore, useCachedMessages, hasCachedMessages, reconcileCatchUp, mergeMessagesById, upsertMessage, newClientId } from '../store/messageStore';
+import { useActiveChatStore } from '../store/activeChatStore';
 import {
   joinConversation,
   leaveConversation,
@@ -53,6 +58,7 @@ import { useMessageActions } from '../hooks/useMessageActions';
 import { useMessageHighlight } from '../hooks/useMessageHighlight';
 import { useAttachments } from '../hooks/useAttachments';
 import { useMute } from '../hooks/useMute';
+import { openForwardPicker } from '../utils/forwardMessage';
 import { useMessageEdit } from '../hooks/useMessageEdit';
 import { useDraft } from '../hooks/useDraft';
 
@@ -64,7 +70,7 @@ import MarkdownText from '../components/MarkdownText';
 import ReactionBar from '../components/ReactionBar';
 import MessageInput from '../components/MessageInput';
 import { MentionUser } from '../components/MentionAutocomplete';
-import AttachmentPicker from '../components/AttachmentPicker';
+import AttachmentPicker, { SelectedFile } from '../components/AttachmentPicker';
 import AttachmentPreview from '../components/AttachmentPreview';
 import { AttachmentList } from '../components/FileCard';
 import UserAvatar from '../components/UserAvatar';
@@ -72,6 +78,7 @@ import SwipeableMessage from '../components/SwipeableMessage';
 import ConnectionBanner from '../components/ConnectionBanner';
 import ScrollToBottomFAB from '../components/ScrollToBottomFAB';
 import TypingIndicator, { TypingUser } from '../components/TypingIndicator';
+import * as Haptics from 'expo-haptics';
 import { formatMessageTime, formatDateHeader, shouldShowDateHeader } from '../utils/dateFormatters';
 
 type RouteProps = RouteProp<RootStackParamList, 'Conversation'>;
@@ -80,15 +87,21 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 export default function ConversationScreen() {
   const route = useRoute<RouteProps>();
   const navigation = useNavigation<NavigationProp>();
+  const headerHeight = useHeaderHeight();
   const { conversationId, name: initialName, highlightMessageId } = route.params;
   const { user } = useAuthStore();
   const { markConversationRead } = useUnreadStore();
 
-  // --- Message state ---
-  const [messages, setMessages] = useState<DMMessage[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // --- Message state (backed by the central cache — ST-01) ---
+  const cacheKey = `conversation:${conversationId}`;
+  const messages = useCachedMessages<DMMessage>(cacheKey);
+  const setMessages = useCallback(
+    (value: DMMessage[] | ((prev: DMMessage[]) => DMMessage[])) =>
+      useMessageStore.getState().setMessages<DMMessage>(cacheKey, value),
+    [cacheKey],
+  );
+  const [isLoading, setIsLoading] = useState(() => !hasCachedMessages(cacheKey));
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [isSending, setIsSending] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { messageText, setMessageText, clearDraft } = useDraft(`conversation:${conversationId}`);
@@ -112,8 +125,18 @@ export default function ConversationScreen() {
 
   const flatListRef = useRef<FlatList>(null);
   const isNearBottom = useRef(true);
+  // While a programmatic scroll-to-bottom is settling, ignore transient onScroll
+  // readings. Variable-height rows finish measuring after the scroll fires, and
+  // those reflow events would otherwise flip us out of "stick to bottom" and park
+  // the list just above the end (the chat opens/sends short of the newest message).
+  const programmaticScrollUntil = useRef(0);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const [showScrollFAB, setShowScrollFAB] = useState(false);
+
+  const scrollToBottom = useCallback((animated: boolean) => {
+    programmaticScrollUntil.current = Date.now() + 350;
+    flatListRef.current?.scrollToEnd({ animated });
+  }, []);
 
   // --- Shared hooks ---
   const { isMuted, isMuteLoading, handleToggleMute } = useMute('conversation', conversationId);
@@ -126,8 +149,13 @@ export default function ConversationScreen() {
   const {
     selectedFiles, showPicker, uploadProgress, isUploading,
     openPicker, closePicker, addFiles, removeFile, clearFiles,
-    setUploadProgress, setIsUploading, resetUpload,
   } = useAttachments();
+  // Per-upload progress (UX-01): keyed by the optimistic message's clientId, so a
+  // file send renders an immediate placeholder and reconciles in the background
+  // like text sends. `pendingUploadsRef` keeps the picked files for an in-flight
+  // upload so a failed row can be retried with the same files + clientId.
+  const [uploadProgressMap, setUploadProgressMap] = useState<Record<string, number>>({});
+  const pendingUploadsRef = useRef<Map<string, SelectedFile[]>>(new Map());
   const { highlightedId, highlightAnim, hasScrolledToHighlight } = useMessageHighlight({
     messages,
     flatListRef: flatListRef as React.RefObject<FlatList>,
@@ -208,17 +236,68 @@ export default function ConversationScreen() {
         if (loadMore) {
           setMessages(prev => [...response.data.messages, ...prev]);
         } else {
-          setMessages(response.data.messages);
+          const prev = (useMessageStore.getState().slices[cacheKey] as DMMessage[] | undefined) ?? [];
+          setMessages(mergeMessagesById(prev, response.data.messages));
         }
         setHasMore(response.data.hasMore);
       }
     } catch (err: any) {
-      if (!loadMore) setError(err.message || 'Failed to load messages');
+      if (!loadMore) {
+        setError(err.message || 'Failed to load messages');
+        useMessageStore.getState().clearKey(cacheKey);
+      }
     } finally {
       setIsLoading(false);
       setIsLoadingMore(false);
     }
-  }, [conversationId, messages]);
+  }, [conversationId, messages, cacheKey]);
+
+  useFocusEffect(
+    useCallback(() => {
+      useActiveChatStore.getState().setActiveConversation(conversationId);
+      return () => useActiveChatStore.getState().setActiveConversation(null);
+    }, [conversationId]),
+  );
+
+  // --- Catch-up: refetch the latest page and merge into the cache (RT-01).
+  // Background reconcile (no spinner) on re-focus / socket reconnect so DMs
+  // missed during a disconnect or while away show up.
+  const catchUp = useCallback(async () => {
+    try {
+      const response = await conversationApi.getMessages(conversationId, 50);
+      if (!response.success) return;
+      // Read the latest cached slice imperatively so reconciliation sees the
+      // freshest messages (not a stale closure) and can compute the gap once.
+      const prev = (useMessageStore.getState().slices[cacheKey] as DMMessage[] | undefined) ?? [];
+      const { messages: reconciled, gap } = reconcileCatchUp(prev, response.data.messages);
+      setMessages(reconciled);
+      // A gap means >1 page arrived while away; re-enable "load earlier" so the
+      // user can scroll up and backfill the missing range.
+      if (gap) setHasMore(true);
+    } catch {
+      // Best-effort; live socket events and the next focus will reconcile.
+    }
+  }, [conversationId, cacheKey, setMessages]);
+
+  const skipFirstFocus = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (skipFirstFocus.current) { skipFirstFocus.current = false; return; }
+      catchUp();
+    }, [catchUp]),
+  );
+
+  const wasConnected = useRef(true);
+  useEffect(() => {
+    const unsub = useConnectionStore.subscribe((state) => {
+      if (state.status === 'connected') {
+        if (!wasConnected.current) { wasConnected.current = true; catchUp(); }
+      } else {
+        wasConnected.current = false;
+      }
+    });
+    return unsub;
+  }, [catchUp]);
 
   // --- Initial load + socket join ---
   useEffect(() => {
@@ -237,12 +316,14 @@ export default function ConversationScreen() {
     const unsubscribe = subscribeToConversationEvents({
       onNewDMMessage: (data) => {
         if (data.conversationId === conversationId && !data.message.parentMessageId) {
-          setMessages(prev => prev.some(m => m.id === data.message.id) ? prev : [...prev, data.message]);
-          if (isNearBottom.current) {
-            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-          } else {
-            setNewMessageCount(c => c + 1);
-          }
+          // Own messages echo back here too — reconcile by clientId/id so the
+          // optimistic placeholder is replaced rather than duplicated (UX-01).
+          const isOwnEcho = data.message.authorId === user?.id;
+          setMessages(prev => upsertMessage(prev, data.message));
+          if (isOwnEcho) return;
+          // onContentSizeChange snaps us to the new bottom while we're pinned there;
+          // otherwise surface the unread pill instead of yanking the user down.
+          if (!isNearBottom.current) setNewMessageCount(c => c + 1);
         }
       },
       onDMMessageUpdated: (data) => {
@@ -379,11 +460,68 @@ export default function ConversationScreen() {
   }, [conversationId, user?.id, setMessageText]);
 
   // --- Send message ---
+  const deliverDMMessage = useCallback(async (content: string, clientId: string) => {
+    setMessages(prev => prev.map(m =>
+      m.clientId === clientId ? { ...m, sendStatus: 'sending' as const } : m,
+    ));
+    try {
+      const response = await conversationApi.sendMessage(conversationId, content, undefined, clientId);
+      if (!response.success) throw new Error('send failed');
+      setMessages(prev => upsertMessage(prev, { ...response.data.message, sendStatus: undefined }));
+    } catch {
+      setMessages(prev => prev.map(m =>
+        m.clientId === clientId ? { ...m, sendStatus: 'failed' as const } : m,
+      ));
+    }
+  }, [conversationId, setMessages]);
+
+  // Upload variant of deliverDMMessage (UX-01): runs the multipart upload for an
+  // optimistic file message and reconciles on success. The picked files live in
+  // pendingUploadsRef so a failed upload can be retried with the same clientId.
+  const deliverDMUpload = useCallback(async (clientId: string) => {
+    const files = pendingUploadsRef.current.get(clientId);
+    if (!files || files.length === 0) return;
+    // Read the caption off the optimistic row so retries reuse it without extra state.
+    const slice = useMessageStore.getState().slices[cacheKey] as DMMessage[] | undefined;
+    const caption = slice?.find(m => m.clientId === clientId)?.content || undefined;
+    setMessages(prev => prev.map(m =>
+      m.clientId === clientId ? { ...m, sendStatus: 'sending' as const } : m,
+    ));
+    setUploadProgressMap(prev => ({ ...prev, [clientId]: 0 }));
+    try {
+      const filesToUpload = files.map(f => ({ uri: f.uri, name: f.name, type: f.type }));
+      const response = await uploadApi.uploadToConversation(conversationId, filesToUpload, caption, (p) =>
+        setUploadProgressMap(prev => ({ ...prev, [clientId]: p })),
+      );
+      if (!response.success) throw new Error('upload failed');
+      pendingUploadsRef.current.delete(clientId);
+      setUploadProgressMap(prev => { const next = { ...prev }; delete next[clientId]; return next; });
+      // The server doesn't echo clientId for uploads (idempotency is out of scope),
+      // so re-attach it here to reconcile against the optimistic row by clientId.
+      setMessages(prev => upsertMessage(prev, { ...response.data.message, clientId, sendStatus: undefined }));
+    } catch {
+      setMessages(prev => prev.map(m =>
+        m.clientId === clientId ? { ...m, sendStatus: 'failed' as const } : m,
+      ));
+    }
+  }, [conversationId, cacheKey, setMessages]);
+
+  const handleRetryMessage = useCallback((message: DMMessage) => {
+    if (!message.clientId) return;
+    if (pendingUploadsRef.current.has(message.clientId)) {
+      deliverDMUpload(message.clientId);
+    } else {
+      deliverDMMessage(message.content, message.clientId);
+    }
+  }, [deliverDMMessage, deliverDMUpload]);
+
   const handleSendMessage = async () => {
     const content = messageText.trim();
     const hasFiles = selectedFiles.length > 0;
     if (!content && !hasFiles) return;
-    if (isSending || isUploading) return;
+    if (isUploading) return;
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     // Stop typing
     if (isTypingRef.current && user?.id) { isTypingRef.current = false; sendDMTypingStop(conversationId, user.id); }
@@ -392,33 +530,67 @@ export default function ConversationScreen() {
     clearDraft();
     Keyboard.dismiss();
 
-    try {
-      if (hasFiles) {
-        setIsUploading(true);
-        setUploadProgress(0);
-        const filesToUpload = selectedFiles.map(f => ({ uri: f.uri, name: f.name, type: f.type }));
-        const response = await uploadApi.uploadToConversation(conversationId, filesToUpload, content || undefined, (p) => setUploadProgress(p));
-        if (response.success) {
-          const newMsg = response.data.message;
-          setMessages(prev => prev.some(m => m.id === newMsg.id) ? prev : [...prev, newMsg]);
-          clearFiles();
-        }
-      } else {
-        setIsSending(true);
-        const response = await conversationApi.sendMessage(conversationId, content);
-        if (response.success) {
-          const newMsg = response.data.message;
-          setMessages(prev => prev.some(m => m.id === newMsg.id) ? prev : [...prev, newMsg]);
-        }
-      }
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-    } catch (err: any) {
-      Alert.alert('Error', 'Failed to send message. Please try again.');
-      if (!hasFiles) setMessageText(content);
-    } finally {
-      setIsSending(false);
-      resetUpload();
+    // Optimistic file send (UX-01): render a placeholder with local previews now,
+    // then upload + reconcile in the background — consistent with text sends.
+    if (hasFiles) {
+      const clientId = newClientId();
+      const now = new Date().toISOString();
+      const optimisticAttachments: Attachment[] = selectedFiles.map((f, i) => ({
+        id: `temp-att-${clientId}-${i}`,
+        fileName: f.name,
+        // Use the picked file's local uri so image previews render immediately.
+        fileUrl: f.uri,
+        mimeType: f.type,
+        fileSize: f.size ?? 0,
+      }));
+      const optimistic: DMMessage = {
+        id: `temp-${clientId}`,
+        clientId,
+        sendStatus: 'sending',
+        content,
+        authorId: user?.id ?? '',
+        authorName: user?.displayName ?? 'You',
+        authorAvatar: user?.avatarUrl ?? null,
+        isEdited: false,
+        isPinned: false,
+        attachments: optimisticAttachments,
+        reactions: [],
+        parentMessageId: null,
+        replyCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+      pendingUploadsRef.current.set(clientId, selectedFiles);
+      isNearBottom.current = true;
+      setMessages(prev => [...prev, optimistic]);
+      clearFiles();
+      deliverDMUpload(clientId);
+      return;
     }
+
+    const clientId = newClientId();
+    const now = new Date().toISOString();
+    const optimistic: DMMessage = {
+      id: `temp-${clientId}`,
+      clientId,
+      sendStatus: 'sending',
+      content,
+      authorId: user?.id ?? '',
+      authorName: user?.displayName ?? 'You',
+      authorAvatar: user?.avatarUrl ?? null,
+      isEdited: false,
+      isPinned: false,
+      attachments: [],
+      reactions: [],
+      parentMessageId: null,
+      replyCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    // Pin to bottom before inserting so onContentSizeChange snaps to the newest row.
+    isNearBottom.current = true;
+    setMessages(prev => [...prev, optimistic]);
+    deliverDMMessage(content, clientId);
   };
 
   // --- Delete + Pin ---
@@ -500,7 +672,7 @@ export default function ConversationScreen() {
             </TouchableOpacity>
           )}
 
-          <View style={[styles.messageBubble, isOwnMessage && styles.ownMessageBubble]}>
+          <View style={[styles.messageBubble, isOwnMessage && styles.ownMessageBubble, item.sendStatus === 'sending' && styles.messageBubbleSending]}>
             {!isOwnMessage && <Text style={styles.authorName}>{item.authorName}</Text>}
             {isEditing ? (
               <View style={styles.editContainer}>
@@ -553,6 +725,20 @@ export default function ConversationScreen() {
                   latestReplyAuthors={item.latestReplyAuthors}
                   onPress={() => navigation.navigate('Thread', { messageId: item.id, conversationId, conversationName: displayName })}
                 />
+                {item.sendStatus === 'sending' && (
+                  <Text style={[styles.sendStatusSending, isOwnMessage && styles.sendStatusSendingOwn]}>
+                    {item.clientId !== undefined && uploadProgressMap[item.clientId] !== undefined
+                      ? `Uploading… ${Math.round(uploadProgressMap[item.clientId] * 100)}%`
+                      : 'Sending…'}
+                  </Text>
+                )}
+                {item.sendStatus === 'failed' && (
+                  <TouchableOpacity onPress={() => handleRetryMessage(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                    <Text style={styles.sendStatusFailed}>
+                      <Ionicons name="alert-circle" size={12} color={colors.error} /> Failed to send. Tap to retry.
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </>
             )}
           </View>
@@ -580,18 +766,19 @@ export default function ConversationScreen() {
   };
 
   // --- Loading / Error ---
-  if (isLoading) return <ChatLoadingState />;
-  if (error) return <ChatErrorState error={error} onRetry={() => fetchMessages()} />;
+  if (isLoading && messages.length === 0) return <ChatLoadingState />;
+  if (error && messages.length === 0) return <ChatErrorState error={error} onRetry={() => fetchMessages()} />;
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <KeyboardAvoidingView style={styles.keyboardView} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
+      <KeyboardAvoidingView style={styles.keyboardView} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}>
         <ConnectionBanner />
         <FlatList
           ref={flatListRef}
           data={messages}
-          keyExtractor={item => item.id}
+          keyExtractor={item => item.clientId ?? item.id}
           renderItem={renderMessage}
+          {...CHAT_LIST_PERF_PROPS}
           keyboardDismissMode="on-drag"
           contentContainerStyle={styles.messageList}
           onScroll={({ nativeEvent }) => {
@@ -599,22 +786,28 @@ export default function ConversationScreen() {
             if (contentOffset.y < 50 && hasMore && !isLoadingMore) {
               handleLoadMore();
             }
+            // Don't let reflow events during a programmatic scroll un-pin us.
+            if (Date.now() < programmaticScrollUntil.current) return;
             const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-            const nearBottom = distanceFromBottom < 200;
+            const nearBottom = distanceFromBottom < 150;
             isNearBottom.current = nearBottom;
             setShowScrollFAB(!nearBottom);
             if (nearBottom) {
               setNewMessageCount(0);
             }
           }}
-          scrollEventThrottle={100}
+          scrollEventThrottle={16}
           inverted={false}
+          // Anchor the visible messages when older history is prepended (UX-04) so
+          // loading earlier messages doesn't teleport the viewport. minIndexForVisible:1
+          // keeps the load-more header (index 0) from fighting the anchor.
+          maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
           onScrollToIndexFailed={info => {
             flatListRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
           }}
           onContentSizeChange={() => {
             if ((route.params.highlightMessageId || highlightMessageId) && !hasScrolledToHighlight.current) return;
-            if (messages.length > 0 && !isLoadingMore && isNearBottom.current) flatListRef.current?.scrollToEnd({ animated: false });
+            if (messages.length > 0 && !isLoadingMore && isNearBottom.current) scrollToBottom(false);
           }}
           ListHeaderComponent={
             isLoadingMore ? <ActivityIndicator style={styles.loadingMore} color={colors.primary} /> :
@@ -633,7 +826,8 @@ export default function ConversationScreen() {
           visible={showScrollFAB}
           newMessageCount={newMessageCount}
           onPress={() => {
-            flatListRef.current?.scrollToEnd({ animated: true });
+            isNearBottom.current = true;
+            scrollToBottom(true);
             setNewMessageCount(0);
             setShowScrollFAB(false);
           }}
@@ -657,7 +851,7 @@ export default function ConversationScreen() {
                 onChangeText={handleTextChange}
                 onSend={handleSendMessage}
                 placeholder={`Message ${displayName}`}
-                isSending={isSending || isUploading}
+                isSending={isUploading}
                 users={mentionUsers}
                 roles={[]}
                 includeSpecialMentions={false}
@@ -691,6 +885,14 @@ export default function ConversationScreen() {
           const threadMessageId = msg.parentMessageId || msg.id;
           navigation.navigate('Thread', { messageId: threadMessageId, conversationId, conversationName: displayName });
         } : undefined}
+        onForward={selectedMessage ? () => {
+          openForwardPicker(
+            navigation,
+            selectedMessage,
+            selectedMessage.authorName,
+            { conversationId },
+          );
+        } : undefined}
       />
     </SafeAreaView>
   );
@@ -699,7 +901,7 @@ export default function ConversationScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   keyboardView: { flex: 1 },
-  messageList: { paddingVertical: spacing.md, paddingHorizontal: spacing.md },
+  messageList: { paddingTop: spacing.md, paddingBottom: spacing.lg, paddingHorizontal: spacing.md },
   loadingMore: { padding: spacing.md },
   loadMoreButton: { padding: spacing.md, alignItems: 'center' },
   loadMoreText: { color: colors.primary, fontSize: typography.fontSize.sm },
@@ -715,6 +917,10 @@ const styles = StyleSheet.create({
   messageContainerEditing: { backgroundColor: colors.primary + '10', padding: spacing.xs, borderRadius: borderRadius.md },
   messageBubble: { backgroundColor: colors.surface, borderRadius: borderRadius.lg, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, maxWidth: '80%', borderBottomLeftRadius: borderRadius.sm },
   ownMessageBubble: { backgroundColor: colors.primary, borderBottomLeftRadius: borderRadius.lg, borderBottomRightRadius: borderRadius.sm },
+  messageBubbleSending: { opacity: 0.6 },
+  sendStatusSending: { fontSize: typography.fontSize.xs, color: colors.textMuted, marginTop: 2, alignSelf: 'flex-end' },
+  sendStatusSendingOwn: { color: colors.white, opacity: 0.85 },
+  sendStatusFailed: { fontSize: typography.fontSize.xs, color: colors.error, marginTop: 2, alignSelf: 'flex-end' },
   authorName: { fontSize: typography.fontSize.xs, fontWeight: typography.fontWeight.semibold, color: colors.primary, marginBottom: 2 },
   messageContentText: { fontSize: typography.fontSize.md, color: colors.text, lineHeight: 20 },
   ownMessageContent: { fontSize: typography.fontSize.md, color: colors.white, lineHeight: 20 },

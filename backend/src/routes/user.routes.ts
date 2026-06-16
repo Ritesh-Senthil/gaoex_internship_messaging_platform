@@ -538,6 +538,7 @@ router.delete('/me/avatar', authenticate, async (req: Request, res: Response, ne
  */
 router.get('/search', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const currentUserId = req.user!.id;
     const { q, limit = 20 } = req.query;
 
     if (!q || typeof q !== 'string') {
@@ -547,13 +548,20 @@ router.get('/search', authenticate, async (req: Request, res: Response, next: Ne
       });
     }
 
+    // SEC-08: only return users who share at least one program with the caller.
+    // This prevents global directory/email enumeration while still letting users
+    // find people they can actually start a conversation with.
     const users = await prisma.user.findMany({
       where: {
+        isActive: true,
+        id: { not: currentUserId },
         OR: [
           { displayName: { contains: q, mode: 'insensitive' } },
           { email: { contains: q, mode: 'insensitive' } },
         ],
-        isActive: true,
+        memberships: {
+          some: { program: { memberships: { some: { userId: currentUserId } } } },
+        },
       },
       select: {
         id: true,

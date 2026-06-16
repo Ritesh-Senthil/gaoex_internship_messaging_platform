@@ -6,7 +6,7 @@ import { io, Socket } from 'socket.io-client';
 import { API_CONFIG } from '../constants/config';
 import { Message, DMMessage } from '../types';
 import { useConnectionStore } from '../store/connectionStore';
-import { getAccessToken } from './api';
+import { getAccessToken, refreshAccessToken } from './api';
 
 let socket: Socket | null = null;
 let authenticatedUserId: string | null = null;
@@ -15,6 +15,48 @@ let authenticatedUserId: string | null = null;
 const joinedChannels = new Set<string>();
 const joinedConversations = new Set<string>();
 const joinedPrograms = new Set<string>();
+
+// Guard against an auth_error → refresh → reconnect → auth_error loop when a
+// refreshed token is still somehow rejected (e.g. clock skew). Resets after a
+// quiet window.
+let authErrorRetries = 0;
+let lastAuthErrorAt = 0;
+const AUTH_ERROR_WINDOW_MS = 30_000;
+const MAX_AUTH_ERROR_RETRIES = 2;
+
+let onAuthExhausted: (() => void) | null = null;
+
+/** Register callback for when socket auth recovery is exhausted (authStore wires logout). */
+export function setOnAuthExhausted(callback: () => void): void {
+  onAuthExhausted = callback;
+}
+
+/**
+ * Emit `authenticate` with the freshest token we have. If the in-memory token
+ * is missing, try a refresh first so we never send a non-token value (the
+ * server now rejects anything that isn't a valid JWT).
+ */
+async function emitAuthenticate(): Promise<void> {
+  if (!authenticatedUserId) return;
+  let token = getAccessToken();
+  if (!token) {
+    token = await refreshAccessToken();
+  }
+  if (token) {
+    socket?.emit('authenticate', token);
+  }
+}
+
+/**
+ * Re-join every room we were tracking. Called once the server acks
+ * authentication, since room-join authorization requires the socket to be
+ * authenticated first.
+ */
+function rejoinTrackedRooms(): void {
+  joinedPrograms.forEach((id) => socket?.emit('join_program', id));
+  joinedChannels.forEach((id) => socket?.emit('join_channel', id));
+  joinedConversations.forEach((id) => socket?.emit('join_conversation', id));
+}
 
 /**
  * Initialize socket connection
@@ -34,16 +76,43 @@ export function initializeSocket(): Socket {
   });
 
   socket.on('connect', () => {
+    // TCP is up but we're not authenticated yet — wait for `authenticated`.
+    useConnectionStore.getState().setConnecting();
+    void emitAuthenticate();
+  });
+
+  // Server confirmed our identity — now realtime is actually usable.
+  socket.on('authenticated', () => {
+    authErrorRetries = 0;
     useConnectionStore.getState().setConnected();
-    // Re-authenticate on reconnect with JWT token
-    if (authenticatedUserId) {
-      const token = getAccessToken();
-      socket?.emit('authenticate', token || authenticatedUserId);
+    rejoinTrackedRooms();
+  });
+
+  // Server rejected our token (usually expired). Refresh once and reconnect;
+  // because the server force-disconnects us, auto-reconnect won't fire, so we
+  // reconnect explicitly.
+  socket.on('auth_error', async () => {
+    if (!authenticatedUserId) return;
+
+    const now = Date.now();
+    if (now - lastAuthErrorAt > AUTH_ERROR_WINDOW_MS) authErrorRetries = 0;
+    lastAuthErrorAt = now;
+    authErrorRetries += 1;
+    if (authErrorRetries > MAX_AUTH_ERROR_RETRIES) {
+      // Refreshing isn't helping; force the same logout path as REST 401.
+      useConnectionStore.getState().setDisconnected();
+      if (onAuthExhausted) onAuthExhausted();
+      return;
     }
-    // Re-join all tracked rooms so we don't miss events
-    joinedChannels.forEach(id => socket?.emit('join_channel', id));
-    joinedConversations.forEach(id => socket?.emit('join_conversation', id));
-    joinedPrograms.forEach(id => socket?.emit('join_program', id));
+
+    const token = await refreshAccessToken();
+    if (!token) return; // refresh failed → tokens cleared + logout callback fired
+
+    if (socket && !socket.connected) {
+      socket.connect(); // 'connect' → emitAuthenticate → 'authenticated' → rejoin
+    } else {
+      void emitAuthenticate();
+    }
   });
 
   socket.on('disconnect', () => {
@@ -68,9 +137,9 @@ export function authenticateSocket(userId: string): void {
   authenticatedUserId = userId;
   const s = getSocket();
   if (s.connected) {
-    const token = getAccessToken();
-    s.emit('authenticate', token || userId);
+    void emitAuthenticate();
   }
+  // If not yet connected, the 'connect' handler will authenticate on connect.
 }
 
 /**
@@ -78,6 +147,8 @@ export function authenticateSocket(userId: string): void {
  */
 export function clearSocketAuth(): void {
   authenticatedUserId = null;
+  authErrorRetries = 0;
+  lastAuthErrorAt = 0;
   joinedChannels.clear();
   joinedConversations.clear();
   joinedPrograms.clear();
@@ -190,13 +261,21 @@ export interface MessageUnpinnedData {
   unpinnedBy: { id: string; displayName: string };
 }
 
+// Channel typing payload (enriched with profile info from the server, mirrors TypingEventData but keyed by channel)
+export interface ChannelTypingEventData {
+  channelId: string;
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
 // Event listener types
 export interface SocketEventHandlers {
   onNewMessage?: (message: Message) => void;
   onMessageUpdated?: (message: Message) => void;
   onMessageDeleted?: (data: { messageId: string; channelId: string; parentMessageId?: string | null }) => void;
-  onUserTyping?: (data: { channelId: string; userId: string }) => void;
-  onUserStoppedTyping?: (data: { channelId: string; userId: string }) => void;
+  onUserTyping?: (data: ChannelTypingEventData) => void;
+  onUserStoppedTyping?: (data: ChannelTypingEventData) => void;
   onReactionAdded?: (data: ReactionEventData) => void;
   onReactionRemoved?: (data: ReactionEventData) => void;
   onThreadReplyAdded?: (data: ThreadReplyAddedData) => void;
@@ -417,21 +496,18 @@ export interface UnreadChannelEventData {
   channelId: string;
   programId: string;
   authorId: string;
-  excludeSocketIds?: string[];
 }
 
 export interface UnreadDMEventData {
   conversationId: string;
   recipientUserId: string;
   senderId: string;
-  excludeSocketIds?: string[];
 }
 
 export interface UnreadMentionEventData {
   channelId: string;
   programId: string;
   mentionedUserIds: string[];
-  excludeSocketIds?: string[];
 }
 
 // Unread event handler types
@@ -469,15 +545,6 @@ export function subscribeToUnreadEvents(handlers: UnreadEventHandlers): () => vo
       s.off('unread:mention', handlers.onUnreadMention);
     }
   };
-}
-
-/**
- * Check if current socket is in the exclude list
- */
-export function shouldIgnoreEvent(excludeSocketIds?: string[]): boolean {
-  if (!excludeSocketIds || excludeSocketIds.length === 0) return false;
-  const s = getSocket();
-  return excludeSocketIds.includes(s.id || '');
 }
 
 // ============================================
@@ -888,7 +955,6 @@ export default {
   sendDMTypingStop,
   subscribeToConversationEvents,
   subscribeToUnreadEvents,
-  shouldIgnoreEvent,
   subscribeToChannelCategoryEvents,
   subscribeToMemberRoleEvents,
   subscribeToPresenceEvents,

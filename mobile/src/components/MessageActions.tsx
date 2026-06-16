@@ -35,6 +35,7 @@ interface MessageActionsProps {
   onQuickReact?: (emoji: string) => void;
   onReply?: () => void;
   onPin?: () => void;
+  onForward?: () => void;
 }
 
 export default function MessageActions({
@@ -49,6 +50,7 @@ export default function MessageActions({
   onQuickReact,
   onReply,
   onPin,
+  onForward,
 }: MessageActionsProps) {
   const handleCopy = () => {
     Clipboard.setString(messageContent);
@@ -83,6 +85,11 @@ export default function MessageActions({
     onPin?.();
   };
 
+  const handleForward = () => {
+    onClose();
+    onForward?.();
+  };
+
   const handleQuickReact = (emoji: string) => {
     onClose();
     onQuickReact?.(emoji);
@@ -99,6 +106,9 @@ export default function MessageActions({
   };
 
   const contextActions: ActionItem[] = [];
+  if (onForward) {
+    contextActions.push({ id: 'forward', label: 'Forward', icon: 'arrow-redo-outline', onPress: handleForward });
+  }
   if (onReply) {
     contextActions.push({ id: 'reply', label: 'Reply in Thread', icon: 'chatbubble-outline', onPress: handleReply });
   }

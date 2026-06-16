@@ -4,14 +4,21 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
 import { prisma } from '../config/database';
 import { authenticate } from '../middleware/auth';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../middleware/errorHandler';
+import { validateBody } from '../middleware/validate';
 
 const router = Router();
 
 // Common emojis for quick reactions
 const COMMON_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🔥', '👀'];
+
+// ── Validation schemas (SEC-07) ──
+const addReactionSchema = z.object({
+  emoji: z.string().trim().min(1, 'Emoji is required'),
+});
 
 /**
  * GET /api/messages/:messageId/reactions
@@ -103,7 +110,7 @@ router.get('/:messageId/reactions', authenticate, async (req: Request, res: Resp
  * POST /api/messages/:messageId/reactions
  * Add a reaction to a message
  */
-router.post('/:messageId/reactions', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:messageId/reactions', authenticate, validateBody(addReactionSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { messageId } = req.params;
     const { emoji } = req.body;

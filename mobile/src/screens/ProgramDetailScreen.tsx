@@ -25,10 +25,11 @@ import * as Haptics from 'expo-haptics';
 import { colors, spacing, typography, borderRadius } from '../constants/theme';
 import { APP_CONFIG } from '../constants/config';
 import { RootStackParamList, ProgramDetail, Channel, Category } from '../types';
-import { programApi } from '../services/api';
 import { useUnreadStore } from '../store/unreadStore';
 import { useAuthStore } from '../store/authStore';
 import { useMuteStore } from '../store/muteStore';
+import { useChannelStore, useProgramChannels, useProgramCategories } from '../store/channelStore';
+import { getActiveChannelId } from '../store/activeChatStore';
 import { 
   joinProgram, 
   leaveProgram, 
@@ -36,7 +37,6 @@ import {
   subscribeToChannelCategoryEvents,
   subscribeToMemberRoleEvents,
   subscribeToProgramEvents,
-  shouldIgnoreEvent,
   UnreadChannelEventData,
   UnreadMentionEventData,
   ChannelEventData,
@@ -68,9 +68,10 @@ export default function ProgramDetailScreen() {
   const { channelUnreads, setAllChannelUnreads, incrementChannelUnread, markChannelRead } = useUnreadStore();
   const { channelMutes, initChannelMutes } = useMuteStore();
   const { user } = useAuthStore();
-  
-  // Track which channel user is currently viewing (to ignore events)
-  const currentChannelId = useRef<string | null>(null);
+
+  // Channels/categories come from the shared channelStore (keyed by program)
+  const channels = useProgramChannels(programId);
+  const categories = useProgramCategories(programId);
 
   const fetchProgram = useCallback(async (showRefresh = false) => {
     try {
@@ -81,50 +82,45 @@ export default function ProgramDetailScreen() {
       }
       setError(null);
 
-      const response = await programApi.getProgram(programId);
+      // Fetch via the shared channelStore so channels/categories are kept in sync
+      const programData = await useChannelStore.getState().fetchProgramChannels(programId);
 
-      if (response.success) {
-        setProgram(response.data.program);
-        // Expand all categories by default
-        const categoryIds = new Set(
-          response.data.program.categories.map(c => c.id)
-        );
-        setExpandedCategories(categoryIds);
-        
-        // Populate unread store with channel unread data from API
-        const unreads: Record<string, { hasUnread: boolean; mentionCount: number }> = {};
-        // Collect from categorized channels
-        response.data.program.categories.forEach(cat => {
-          cat.channels.forEach(ch => {
-            unreads[ch.id] = {
-              hasUnread: ch.hasUnread ?? false,
-              mentionCount: ch.mentionCount ?? 0,
-            };
-          });
-        });
-        // Collect from uncategorized channels
-        response.data.program.channels.forEach(ch => {
+      setProgram(programData);
+      // Expand all categories by default
+      const categoryIds = new Set(programData.categories.map(c => c.id));
+      setExpandedCategories(categoryIds);
+
+      // Populate unread store with channel unread data from API
+      const unreads: Record<string, { hasUnread: boolean; mentionCount: number }> = {};
+      // Collect from categorized channels
+      programData.categories.forEach(cat => {
+        cat.channels.forEach(ch => {
           unreads[ch.id] = {
             hasUnread: ch.hasUnread ?? false,
             mentionCount: ch.mentionCount ?? 0,
           };
         });
-        setAllChannelUnreads(unreads);
+      });
+      // Collect from uncategorized channels
+      programData.channels.forEach(ch => {
+        unreads[ch.id] = {
+          hasUnread: ch.hasUnread ?? false,
+          mentionCount: ch.mentionCount ?? 0,
+        };
+      });
+      setAllChannelUnreads(unreads);
 
-        // Seed mute store with channel mute data from API
-        const mutes: Record<string, boolean> = {};
-        response.data.program.categories.forEach(cat => {
-          cat.channels.forEach(ch => {
-            if (ch.isMuted) mutes[ch.id] = true;
-          });
-        });
-        response.data.program.channels.forEach(ch => {
+      // Seed mute store with channel mute data from API
+      const mutes: Record<string, boolean> = {};
+      programData.categories.forEach(cat => {
+        cat.channels.forEach(ch => {
           if (ch.isMuted) mutes[ch.id] = true;
         });
-        initChannelMutes(mutes);
-      } else {
-        setError('Failed to load program');
-      }
+      });
+      programData.channels.forEach(ch => {
+        if (ch.isMuted) mutes[ch.id] = true;
+      });
+      initChannelMutes(mutes);
     } catch (err: any) {
       setError(err.message || 'Failed to load program');
     } finally {
@@ -147,12 +143,10 @@ export default function ProgramDetailScreen() {
       onUnreadChannel: (data: UnreadChannelEventData) => {
         // Ignore if this event is for a different program
         if (data.programId !== programId) return;
-        // Ignore if we're currently in this channel (we'll see the message directly)
-        if (currentChannelId.current === data.channelId) return;
+        // Ignore if we're currently viewing this channel (any entry path)
+        if (getActiveChannelId() === data.channelId) return;
         // Ignore if this is our own message
         if (data.authorId === user?.id) return;
-        // Ignore if our socket should be excluded
-        if (shouldIgnoreEvent(data.excludeSocketIds)) return;
         
         // Update unread state
         incrementChannelUnread(data.channelId, false);
@@ -163,9 +157,7 @@ export default function ProgramDetailScreen() {
         // Ignore if we're not mentioned
         if (!user?.id || !data.mentionedUserIds.includes(user.id)) return;
         // Ignore if we're currently in this channel
-        if (currentChannelId.current === data.channelId) return;
-        // Ignore if our socket should be excluded
-        if (shouldIgnoreEvent(data.excludeSocketIds)) return;
+        if (getActiveChannelId() === data.channelId) return;
         
         // Update unread state with mention
         incrementChannelUnread(data.channelId, true);
@@ -183,98 +175,29 @@ export default function ProgramDetailScreen() {
     const unsubscribe = subscribeToChannelCategoryEvents({
       onChannelCreated: (data: ChannelEventData) => {
         if (data.programId !== programId) return;
-        setProgram(prev => {
-          if (!prev) return prev;
-          const channel = data.channel;
-          if (channel.categoryId) {
-            // Add to category
-            return {
-              ...prev,
-              categories: prev.categories.map(cat => 
-                cat.id === channel.categoryId 
-                  ? { ...cat, channels: [...cat.channels, channel] }
-                  : cat
-              ),
-            };
-          } else {
-            // Add to uncategorized
-            return {
-              ...prev,
-              channels: [...prev.channels, channel],
-            };
-          }
-        });
+        useChannelStore.getState().addChannel(programId, data.channel);
       },
       onChannelUpdated: (data: ChannelEventData) => {
         if (data.programId !== programId) return;
-        setProgram(prev => {
-          if (!prev) return prev;
-          const channel = data.channel;
-          return {
-            ...prev,
-            categories: prev.categories.map(cat => ({
-              ...cat,
-              channels: cat.channels.map(ch => 
-                ch.id === channel.id ? { ...ch, ...channel } : ch
-              ),
-            })),
-            channels: prev.channels.map(ch => 
-              ch.id === channel.id ? { ...ch, ...channel } : ch
-            ),
-          };
-        });
+        useChannelStore.getState().updateChannel(programId, data.channel.id, data.channel);
       },
       onChannelDeleted: (data: ChannelDeletedEventData) => {
         if (data.programId !== programId) return;
-        setProgram(prev => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            categories: prev.categories.map(cat => ({
-              ...cat,
-              channels: cat.channels.filter(ch => ch.id !== data.channelId),
-            })),
-            channels: prev.channels.filter(ch => ch.id !== data.channelId),
-          };
-        });
+        useChannelStore.getState().removeChannel(programId, data.channelId);
       },
       onCategoryCreated: (data: CategoryEventData) => {
         if (data.programId !== programId) return;
-        setProgram(prev => {
-          if (!prev) return prev;
-          const newCategory = { ...data.category, channels: [] };
-          setExpandedCategories(s => new Set([...s, newCategory.id]));
-          return {
-            ...prev,
-            categories: [...prev.categories, newCategory],
-          };
-        });
+        useChannelStore.getState().addCategory(programId, data.category);
+        setExpandedCategories(s => new Set([...s, data.category.id]));
       },
       onCategoryUpdated: (data: CategoryEventData) => {
         if (data.programId !== programId) return;
-        setProgram(prev => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            categories: prev.categories.map(cat => 
-              cat.id === data.category.id ? { ...cat, ...data.category } : cat
-            ),
-          };
-        });
+        useChannelStore.getState().updateCategory(programId, data.category.id, data.category);
       },
       onCategoryDeleted: (data: CategoryDeletedEventData) => {
         if (data.programId !== programId) return;
-        setProgram(prev => {
-          if (!prev) return prev;
-          // Find the deleted category and move its channels to uncategorized
-          const deletedCat = prev.categories.find(c => c.id === data.categoryId);
-          const channelsToMove = deletedCat?.channels.map(ch => ({ ...ch, categoryId: null })) || [];
-          return {
-            ...prev,
-            categories: prev.categories.filter(cat => cat.id !== data.categoryId),
-            channels: [...prev.channels, ...channelsToMove],
-          };
-        });
+        // Store moves the deleted category's channels back to uncategorized
+        useChannelStore.getState().removeCategory(programId, data.categoryId);
       },
     });
     
@@ -339,9 +262,6 @@ export default function ProgramDetailScreen() {
   // Refresh when screen comes into focus (e.g., returning from a channel)
   useFocusEffect(
     useCallback(() => {
-      // Clear current channel when returning to this screen
-      currentChannelId.current = null;
-      
       if (isFirstFocus.current) {
         isFirstFocus.current = false;
         return;
@@ -371,8 +291,7 @@ export default function ProgramDetailScreen() {
   const handleChannelPress = (channel: Channel) => {
     // Optimistically mark channel as read BEFORE navigating
     markChannelRead(channel.id);
-    currentChannelId.current = channel.id;
-    
+
     navigation.navigate('Channel', {
       channelId: channel.id,
       channelName: channel.name,
@@ -616,17 +535,17 @@ export default function ProgramDetailScreen() {
           <Text style={styles.sectionTitle}>Channels</Text>
 
           {/* Uncategorized channels first */}
-          {program.channels.length > 0 && (
+          {channels.length > 0 && (
             <View style={styles.uncategorizedChannels}>
-              {program.channels.map(renderChannel)}
+              {channels.map(renderChannel)}
             </View>
           )}
 
           {/* Categories */}
-          {program.categories.map(renderCategory)}
+          {categories.map(renderCategory)}
 
           {/* Empty state */}
-          {program.categories.length === 0 && program.channels.length === 0 && (
+          {categories.length === 0 && channels.length === 0 && (
             <View style={styles.emptyChannels}>
               <Ionicons name="chatbubble-outline" size={32} color={colors.textMuted} />
               <Text style={styles.emptyText}>No channels yet</Text>

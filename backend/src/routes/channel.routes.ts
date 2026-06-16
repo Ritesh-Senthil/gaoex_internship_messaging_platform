@@ -4,19 +4,54 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
 import { prisma } from '../config/database';
 import { authenticate } from '../middleware/auth';
+import { validateBody } from '../middleware/validate';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../middleware/errorHandler';
 import { getFileCategory } from '../config/supabase';
 import { Permissions, hasPermission } from '../utils/permissions';
 import { getUserPermissions } from '../utils/roleHelpers';
+import { canAccessChannel } from '../utils/access';
+import { messageRateLimiter } from '../middleware/rateLimit';
 import {
-  sendPushToUsers,
-  buildChannelMessageNotification,
-  buildMentionNotification,
-} from '../services/pushNotification';
+  resolveChannelMentions,
+  collectChannelMentionRecipients,
+  incrementMentionCounts,
+  emitChannelUnreadEvents,
+  pushChannelMessage,
+} from '../services/messageDispatch';
 
 const router = Router();
+
+// ── Validation schemas (SEC-07) ──
+const sendMessageSchema = z.object({
+  content: z
+    .string()
+    .trim()
+    .min(1, 'Message content is required')
+    .max(4000, 'Message content cannot exceed 4000 characters'),
+  parentMessageId: z.string().uuid('Invalid parent message id').nullish(),
+  // Client-generated nonce for optimistic-send reconciliation (UX-01). Echoed
+  // back on the REST response and the socket broadcast; not persisted.
+  clientId: z.string().max(64).optional(),
+});
+
+const editMessageSchema = z.object({
+  content: z
+    .string()
+    .trim()
+    .min(1, 'Message content is required')
+    .max(4000, 'Message content cannot exceed 4000 characters'),
+});
+
+const markReadSchema = z.object({
+  lastReadMessageId: z.string().nullish(),
+});
+
+const muteChannelSchema = z.object({
+  muted: z.boolean().optional(),
+});
 
 /**
  * GET /api/channels/:id
@@ -289,11 +324,11 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
  * POST /api/channels/:id/messages
  * Send a message to a channel
  */
-router.post('/:id/messages', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/messages', authenticate, messageRateLimiter, validateBody(sendMessageSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const userId = req.user!.id;
-    const { content, parentMessageId } = req.body;
+    const { content, parentMessageId, clientId } = req.body;
 
     if (!content || content.trim().length === 0) {
       throw new BadRequestError('Message content is required');
@@ -305,7 +340,14 @@ router.post('/:id/messages', authenticate, async (req: Request, res: Response, n
 
     const channel = await prisma.channel.findUnique({
       where: { id },
-      select: { id: true, programId: true, type: true },
+      select: {
+        id: true,
+        programId: true,
+        type: true,
+        name: true,
+        isPrivate: true,
+        program: { select: { name: true } },
+      },
     });
 
     if (!channel) {
@@ -323,6 +365,12 @@ router.post('/:id/messages', authenticate, async (req: Request, res: Response, n
       throw new ForbiddenError('You are not a member of this program');
     }
 
+    // Private channel access (SEC-03): posting requires the same view access
+    // enforced on reads.
+    if (channel.isPrivate && !(await canAccessChannel(userId, id, req.user!.isSuperAdmin))) {
+      throw new ForbiddenError('You do not have access to this private channel');
+    }
+
     // Permission checks
     const userPerms = await getUserPermissions(userId, channel.programId, req.user!.isSuperAdmin);
 
@@ -338,66 +386,10 @@ router.post('/:id/messages', authenticate, async (req: Request, res: Response, n
       }
     }
 
-    // Parse mentions from content
-    let mentionedUsers: string[] = [];
-    let mentionedRoles: string[] = [];
-    let mentionEveryone = false;
-
-    // Check for @everyone or @here
-    if (content.includes('@everyone') || content.includes('@here')) {
-      mentionEveryone = true;
-    }
-
-    // Parse @mentions by looking up display names in the program
-    // Mobile app sends mentions as @DisplayName (with non-breaking spaces for multi-word names)
-    const mentionRegex = /@([^\s@]+(?:\u00A0[^\s@]+)*)/g;
-    let match;
-    const mentionNames: string[] = [];
-    while ((match = mentionRegex.exec(content)) !== null) {
-      const mentionName = match[1].replace(/\u00A0/g, ' '); // Convert non-breaking spaces back to regular spaces
-      if (mentionName !== 'everyone' && mentionName !== 'here') {
-        mentionNames.push(mentionName);
-      }
-    }
-
-    // Look up mentioned users and roles by name if we have mentions to resolve
-    if (mentionNames.length > 0) {
-      // Get all program members to match against
-      const programMembers = await prisma.programMembership.findMany({
-        where: { programId: channel.programId },
-        include: {
-          user: { select: { id: true, displayName: true } },
-        },
-      });
-
-      // Get all program roles to match against
-      const programRoles = await prisma.role.findMany({
-        where: { programId: channel.programId },
-        select: { id: true, name: true },
-      });
-
-      // Match mentions to users/roles (case-insensitive)
-      for (const name of mentionNames) {
-        const lowerName = name.toLowerCase();
-        
-        // Check users first
-        const matchedUser = programMembers.find(
-          m => m.user.displayName.toLowerCase() === lowerName
-        );
-        if (matchedUser && !mentionedUsers.includes(matchedUser.user.id)) {
-          mentionedUsers.push(matchedUser.user.id);
-          continue;
-        }
-
-        // Check roles (remove @ prefix if present in role name)
-        const matchedRole = programRoles.find(
-          r => r.name.toLowerCase() === lowerName || r.name.toLowerCase() === `@${lowerName}`
-        );
-        if (matchedRole && !mentionedRoles.includes(matchedRole.id)) {
-          mentionedRoles.push(matchedRole.id);
-        }
-      }
-    }
+    // Resolve mentions. @everyone/@here only honored with MENTION_EVERYONE (SEC-04).
+    const canMentionEveryone = hasPermission(userPerms, Permissions.MENTION_EVERYONE);
+    const mentions = await resolveChannelMentions(content, channel.programId, canMentionEveryone);
+    const { mentionedUsers, mentionedRoles, mentionEveryone } = mentions;
 
     // Validate parent message for thread replies
     if (parentMessageId) {
@@ -416,126 +408,56 @@ router.post('/:id/messages', authenticate, async (req: Request, res: Response, n
       }
     }
 
-    // Create message
-    const message = await prisma.message.create({
-      data: {
-        authorId: userId,
-        channelId: id,
-        content: content.trim(),
-        mentionedUsers,
-        mentionedRoles,
-        mentionEveryone,
-        parentMessageId: parentMessageId || null,
-      },
-      include: {
-        author: {
-          select: {
-            id: true,
-            displayName: true,
-            avatarUrl: true,
-          },
-        },
-        attachments: true,
-      },
-    });
+    // Users to notify for this message's mentions (author excluded).
+    const mentionRecipientIds = await collectChannelMentionRecipients(
+      channel.programId,
+      mentions,
+      userId,
+    );
 
-    // Update parent message thread metadata
-    if (parentMessageId) {
-      await prisma.message.update({
-        where: { id: parentMessageId },
+    // Persist the message and all its side effects atomically (DAT-01/DAT-02):
+    // message insert, parent thread counter, and mention-count bumps either all
+    // succeed or all roll back.
+    const message = await prisma.$transaction(async (tx) => {
+      const created = await tx.message.create({
         data: {
-          replyCount: { increment: 1 },
-          lastReplyAt: new Date(),
+          authorId: userId,
+          channelId: id,
+          content: content.trim(),
+          mentionedUsers,
+          mentionedRoles,
+          mentionEveryone,
+          parentMessageId: parentMessageId || null,
+        },
+        include: {
+          author: { select: { id: true, displayName: true, avatarUrl: true } },
+          attachments: true,
         },
       });
-    }
 
-    // Increment mention counts for mentioned users
-    if (mentionedUsers.length > 0 || mentionedRoles.length > 0 || mentionEveryone) {
-      // Get users to notify based on mentions
-      let usersToNotify: string[] = [...mentionedUsers];
-
-      // If mentionEveryone, get all program members
-      if (mentionEveryone) {
-        const memberships = await prisma.programMembership.findMany({
-          where: { programId: channel.programId },
-          select: { userId: true },
+      if (parentMessageId) {
+        await tx.message.update({
+          where: { id: parentMessageId },
+          data: { replyCount: { increment: 1 }, lastReplyAt: new Date() },
         });
-        usersToNotify = memberships.map(m => m.userId);
       }
 
-      // If roles mentioned, get users with those roles
-      if (mentionedRoles.length > 0) {
-        const memberRoles = await prisma.memberRole.findMany({
-          where: {
-            roleId: { in: mentionedRoles },
-            membership: { programId: channel.programId },
-          },
-          include: {
-            membership: { select: { userId: true } },
-          },
-        });
-        const roleUsers = memberRoles.map(mr => mr.membership.userId);
-        usersToNotify = [...new Set([...usersToNotify, ...roleUsers])];
-      }
+      await incrementMentionCounts(tx, id, mentionRecipientIds);
 
-      // Remove the author from the list
-      usersToNotify = usersToNotify.filter(uid => uid !== userId);
+      return created;
+    });
 
-      // Increment mention counts for all notified users using batch operations
-      if (usersToNotify.length > 0) {
-        // First, get existing channel read records
-        const existingReads = await prisma.channelRead.findMany({
-          where: {
-            channelId: id,
-            userId: { in: usersToNotify },
-          },
-          select: { userId: true },
-        });
-        const existingUserIds = new Set(existingReads.map(r => r.userId));
-
-        // Batch increment existing records
-        if (existingUserIds.size > 0) {
-          await prisma.channelRead.updateMany({
-            where: {
-              channelId: id,
-              userId: { in: Array.from(existingUserIds) },
-            },
-            data: {
-              mentionCount: { increment: 1 },
-            },
-          });
-        }
-
-        // Batch create new records for users without existing entries
-        const newUserIds = usersToNotify.filter(uid => !existingUserIds.has(uid));
-        if (newUserIds.length > 0) {
-          await prisma.channelRead.createMany({
-            data: newUserIds.map(uid => ({
-              userId: uid,
-              channelId: id,
-              lastReadAt: new Date(0), // Never read
-              mentionCount: 1,
-            })),
-            skipDuplicates: true,
-          });
-        }
-      }
-    }
-
-    // Emit real-time events
+    // Emit real-time events (after the transaction has committed).
     const io = req.app.get('io');
     if (io) {
-      // 1. Emit new message to users currently in the channel
-      io.to(`channel:${id}`).emit('new_message', { ...message, parentMessageId: message.parentMessageId || null });
-      
-      // 1b. If this is a thread reply, emit thread metadata update for the parent message
+      io.to(`channel:${id}`).emit('new_message', { ...message, parentMessageId: message.parentMessageId || null, clientId });
+
+      // Thread metadata update for the parent message
       if (parentMessageId) {
         const updatedParent = await prisma.message.findUnique({
           where: { id: parentMessageId },
           select: { replyCount: true, lastReplyAt: true },
         });
-        // Fetch latest 3 unique reply authors for the thread indicator
         const recentReplies = await prisma.message.findMany({
           where: { parentMessageId },
           orderBy: { createdAt: 'desc' },
@@ -554,159 +476,32 @@ router.post('/:id/messages', authenticate, async (req: Request, res: Response, n
         });
       }
 
-      // 2. Emit unread notification to all program members NOT in the channel
-      // Get all sockets in the channel room to exclude them
-      const channelRoom = io.sockets.adapter.rooms.get(`channel:${id}`);
-      const socketsInChannel = channelRoom ? Array.from(channelRoom) : [];
-      
-      // Emit to program room - clients will filter based on whether they're in the channel
-      io.to(`program:${channel.programId}`).emit('unread:channel', {
+      // Unread + mention events (clients currently in the channel ignore these).
+      emitChannelUnreadEvents(io, {
         channelId: id,
         programId: channel.programId,
         authorId: userId,
-        // Clients in the channel should ignore this event
-        excludeSocketIds: socketsInChannel,
+        mentionRecipientIds,
       });
-      
-      // 3. Emit mention notifications to specific users
-      if (mentionedUsers.length > 0 || mentionedRoles.length > 0 || mentionEveryone) {
-        // Get users to notify (already calculated above)
-        let usersWithMentions = [...mentionedUsers];
-        if (mentionEveryone) {
-          const memberships = await prisma.programMembership.findMany({
-            where: { programId: channel.programId },
-            select: { userId: true },
-          });
-          usersWithMentions = memberships.map(m => m.userId);
-        }
-        if (mentionedRoles.length > 0) {
-          const memberRoles = await prisma.memberRole.findMany({
-            where: {
-              roleId: { in: mentionedRoles },
-              membership: { programId: channel.programId },
-            },
-            include: {
-              membership: { select: { userId: true } },
-            },
-          });
-          const roleUsers = memberRoles.map(mr => mr.membership.userId);
-          usersWithMentions = [...new Set([...usersWithMentions, ...roleUsers])];
-        }
-        usersWithMentions = usersWithMentions.filter(uid => uid !== userId);
-        
-        // Emit mention event to program room with list of mentioned users
-        if (usersWithMentions.length > 0) {
-          io.to(`program:${channel.programId}`).emit('unread:mention', {
-            channelId: id,
-            programId: channel.programId,
-            mentionedUserIds: usersWithMentions,
-            excludeSocketIds: socketsInChannel,
-          });
-        }
-      }
     }
 
-    // ── Push Notifications (fire-and-forget) ──
-    (async () => {
-      try {
-        // Get channel + program names for notification text
-        const channelDetail = await prisma.channel.findUnique({
-          where: { id },
-          select: {
-            name: true,
-            programId: true,
-            program: { select: { name: true } },
-          },
-        });
-        if (!channelDetail) return;
-
-        const authorName = message.author.displayName;
-        const channelName = channelDetail.name;
-        const programName = channelDetail.program.name;
-
-        // Get all program members (excluding author)
-        const allMemberships = await prisma.programMembership.findMany({
-          where: { programId: channelDetail.programId },
-          select: { userId: true },
-        });
-        const allMemberIds = allMemberships
-          .map(m => m.userId)
-          .filter(uid => uid !== userId);
-
-        if (allMemberIds.length === 0) return;
-
-        // Get muted channel users (so we can exclude them)
-        const mutedRecords = await prisma.channelRead.findMany({
-          where: {
-            channelId: id,
-            userId: { in: allMemberIds },
-            isMuted: true,
-          },
-          select: { userId: true },
-        });
-        const mutedUserIds = new Set(mutedRecords.map(r => r.userId));
-
-        // Split users: mentioned vs non-mentioned
-        // Mentioned users already calculated above (usersToNotify from mention section)
-        let mentionedUserIdsFinal: string[] = [];
-        if (mentionedUsers.length > 0 || mentionedRoles.length > 0 || mentionEveryone) {
-          mentionedUserIdsFinal = [...mentionedUsers];
-          if (mentionEveryone) {
-            mentionedUserIdsFinal = allMemberIds;
-          }
-          if (mentionedRoles.length > 0) {
-            const memberRolesForPush = await prisma.memberRole.findMany({
-              where: {
-                roleId: { in: mentionedRoles },
-                membership: { programId: channelDetail.programId },
-              },
-              include: { membership: { select: { userId: true } } },
-            });
-            const roleUserIds = memberRolesForPush.map(mr => mr.membership.userId);
-            mentionedUserIdsFinal = [...new Set([...mentionedUserIdsFinal, ...roleUserIds])];
-          }
-          mentionedUserIdsFinal = mentionedUserIdsFinal.filter(uid => uid !== userId);
-        }
-
-        const mentionedSet = new Set(mentionedUserIdsFinal);
-
-        // 1. Send mention push notifications (not muted)
-        const mentionTargets = mentionedUserIdsFinal.filter(uid => !mutedUserIds.has(uid));
-        if (mentionTargets.length > 0) {
-          const mentionType = mentionEveryone ? 'everyone' : (mentionedRoles.length > 0 ? 'role' : 'user');
-          await sendPushToUsers(mentionTargets, buildMentionNotification({
-            authorName,
-            channelName,
-            programName,
-            messagePreview: content.trim(),
-            channelId: id,
-            programId: channelDetail.programId,
-            mentionType,
-          }));
-        }
-
-        // 2. Send channel message push to non-mentioned, non-muted members
-        const channelMsgTargets = allMemberIds.filter(
-          uid => !mentionedSet.has(uid) && !mutedUserIds.has(uid)
-        );
-        if (channelMsgTargets.length > 0) {
-          await sendPushToUsers(channelMsgTargets, buildChannelMessageNotification({
-            authorName,
-            channelName,
-            programName,
-            messagePreview: content.trim(),
-            channelId: id,
-            programId: channelDetail.programId,
-          }));
-        }
-      } catch (pushError) {
-        console.error('[Push] Channel message push failed:', pushError);
-      }
-    })();
+    // Push notifications (fire-and-forget).
+    pushChannelMessage({
+      channelId: id,
+      programId: channel.programId,
+      channelName: channel.name,
+      programName: channel.program.name,
+      authorId: userId,
+      authorName: message.author.displayName,
+      content,
+      mentions,
+      mentionRecipientIds,
+      hasAttachments: false,
+    });
 
     res.status(201).json({
       success: true,
-      data: { message },
+      data: { message: { ...message, clientId } },
     });
   } catch (error) {
     next(error);
@@ -717,7 +512,7 @@ router.post('/:id/messages', authenticate, async (req: Request, res: Response, n
  * PATCH /api/channels/:channelId/messages/:messageId
  * Edit a message
  */
-router.patch('/:channelId/messages/:messageId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.patch('/:channelId/messages/:messageId', authenticate, validateBody(editMessageSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { channelId, messageId } = req.params;
     const userId = req.user!.id;
@@ -738,6 +533,12 @@ router.patch('/:channelId/messages/:messageId', authenticate, async (req: Reques
 
     if (message.channelId !== channelId) {
       throw new BadRequestError('Message does not belong to this channel');
+    }
+
+    // Re-check the user still has access to the channel (SEC-05): a removed
+    // member, or someone who lost private-channel access, cannot edit.
+    if (!req.user!.isSuperAdmin && !(await canAccessChannel(userId, channelId))) {
+      throw new ForbiddenError('You do not have access to this channel');
     }
 
     // Only author can edit their message
@@ -829,6 +630,11 @@ router.delete('/:channelId/messages/:messageId', authenticate, async (req: Reque
 
     if (message.channelId !== channelId) {
       throw new BadRequestError('Message does not belong to this channel');
+    }
+
+    // Re-check the user still has access to the channel (SEC-05).
+    if (!req.user!.isSuperAdmin && !(await canAccessChannel(userId, channelId))) {
+      throw new ForbiddenError('You do not have access to this channel');
     }
 
     // Author can always delete their own; otherwise check MANAGE_MESSAGES permission
@@ -1018,7 +824,7 @@ router.get('/messages/:messageId/thread', authenticate, async (req: Request, res
  * POST /api/channels/:id/read
  * Mark channel as read
  */
-router.post('/:id/read', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/read', authenticate, validateBody(markReadSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const userId = req.user!.id;
@@ -1132,7 +938,7 @@ router.get('/:id/unread', authenticate, async (req: Request, res: Response, next
  * Toggle mute status for a channel. If body includes { muted: true/false },
  * sets explicitly; otherwise toggles current state.
  */
-router.post('/:id/mute', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/mute', authenticate, validateBody(muteChannelSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const userId = req.user!.id;

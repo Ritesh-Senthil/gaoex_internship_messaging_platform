@@ -53,6 +53,18 @@ router.get('/messages', authenticate, async (req: Request, res: Response, next: 
       throw new BadRequestError('Scope must be "all", "channels", or "dms"');
     }
 
+    const isAllScope = searchScope === 'all';
+    // For scope=all we must fetch enough rows from each bucket to cover the
+    // requested window before merge-sorting, then slice the page out locally.
+    // For a single-bucket scope the DB does the pagination directly.
+    const bucketTake = isAllScope ? skip + take : take;
+    const bucketSkip = isAllScope ? 0 : skip;
+
+    // Track whether either bucket was truncated (i.e. more rows exist beyond
+    // what we fetched) so we can compute hasMore accurately for scope=all.
+    let channelBucketTruncated = false;
+    let dmBucketTruncated = false;
+
     const results: SearchResult[] = [];
 
     // ============================================
@@ -135,8 +147,8 @@ router.get('/messages', authenticate, async (req: Request, res: Response, next: 
               },
             },
             orderBy: { createdAt: 'desc' },
-            take: take,
-            skip: searchScope === 'channels' ? skip : 0,
+            take: bucketTake,
+            skip: bucketSkip,
             include: {
               author: {
                 select: {
@@ -147,6 +159,8 @@ router.get('/messages', authenticate, async (req: Request, res: Response, next: 
               },
             },
           });
+
+          channelBucketTruncated = channelMessages.length === bucketTake;
 
           const channelMap = new Map(accessibleChannels.map(c => [c.id, c]));
 
@@ -215,8 +229,8 @@ router.get('/messages', authenticate, async (req: Request, res: Response, next: 
             },
           },
           orderBy: { createdAt: 'desc' },
-          take: take,
-          skip: searchScope === 'dms' ? skip : 0,
+          take: bucketTake,
+          skip: bucketSkip,
           include: {
             author: {
               select: {
@@ -227,6 +241,8 @@ router.get('/messages', authenticate, async (req: Request, res: Response, next: 
             },
           },
         });
+
+        dmBucketTruncated = dmMessages.length === bucketTake;
 
         // Build conversation name lookup — handle group vs 1:1
         const conversationMap = new Map<string, string>();
@@ -263,22 +279,28 @@ router.get('/messages', authenticate, async (req: Request, res: Response, next: 
     // Sort all results by date (newest first) and apply pagination for 'all' scope
     results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-    const paginatedResults = searchScope === 'all'
+    // For scope=all the buckets are over-fetched (skip + take rows each) and
+    // merge-sorted above; slice the requested window out locally. For a single
+    // bucket scope the DB already returned exactly the requested page.
+    const paginatedResults = isAllScope
       ? results.slice(skip, skip + take)
       : results;
 
-    const totalBeforePagination = searchScope === 'all' ? results.length : paginatedResults.length;
+    // hasMore for scope=all is true if there are more merged rows past the
+    // current window, OR if either bucket was truncated (deeper pages exist
+    // beyond the rows we fetched).
+    const hasMore = isAllScope
+      ? results.length > skip + take || channelBucketTruncated || dmBucketTruncated
+      : paginatedResults.length === take;
 
     res.json({
       success: true,
       data: {
-        results: paginatedResults.slice(0, take),
+        results: paginatedResults,
         query,
         scope: searchScope,
-        total: totalBeforePagination,
-        hasMore: searchScope === 'all'
-          ? results.length > skip + take
-          : paginatedResults.length === take,
+        total: paginatedResults.length,
+        hasMore,
       },
     });
   } catch (error) {

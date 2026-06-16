@@ -173,8 +173,10 @@ export const useUnreadStore = create<UnreadState>()(
 );
 
 // Selector hooks for better performance
-export const useChannelUnread = (channelId: string) => 
-  useUnreadStore((state) => state.channelUnreads[channelId] || { hasUnread: false, mentionCount: 0 });
+const EMPTY_CHANNEL_UNREAD: ChannelUnread = { hasUnread: false, mentionCount: 0 };
+
+export const useChannelUnread = (channelId: string) =>
+  useUnreadStore((state) => state.channelUnreads[channelId] ?? EMPTY_CHANNEL_UNREAD);
 
 export const useConversationUnread = (conversationId: string) => 
   useUnreadStore((state) => state.conversationUnreads[conversationId] || 0);

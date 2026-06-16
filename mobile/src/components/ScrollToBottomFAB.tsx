@@ -4,7 +4,7 @@
  * Shows a red badge with the count of new messages received while scrolled up.
  */
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, TouchableOpacity, View, Text, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography, borderRadius } from '../constants/theme';
@@ -16,20 +16,39 @@ interface ScrollToBottomFABProps {
 }
 
 export default function ScrollToBottomFAB({ visible, newMessageCount, onPress }: ScrollToBottomFABProps) {
-  const opacity = useRef(new Animated.Value(0)).current;
+  const progress = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  // Keep the FAB mounted while the exit animation plays; unmount only once it finishes.
+  const [mounted, setMounted] = useState(visible);
 
   useEffect(() => {
-    Animated.timing(opacity, {
+    if (visible) {
+      setMounted(true);
+    }
+    const animation = Animated.timing(progress, {
       toValue: visible ? 1 : 0,
       duration: 200,
       useNativeDriver: true,
-    }).start();
-  }, [visible, opacity]);
+    });
+    animation.start(({ finished }) => {
+      if (finished && !visible) {
+        setMounted(false);
+      }
+    });
+    return () => animation.stop();
+  }, [visible, progress]);
 
-  if (!visible) return null;
+  if (!mounted) return null;
+
+  const scale = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.8, 1],
+  });
 
   return (
-    <Animated.View style={[styles.wrapper, { opacity }]} pointerEvents={visible ? 'auto' : 'none'}>
+    <Animated.View
+      style={[styles.wrapper, { opacity: progress, transform: [{ scale }] }]}
+      pointerEvents={visible ? 'auto' : 'none'}
+    >
       <TouchableOpacity style={styles.fab} onPress={onPress} activeOpacity={0.8}>
         <Ionicons name="chevron-down" size={22} color={colors.white} />
         {newMessageCount > 0 && (

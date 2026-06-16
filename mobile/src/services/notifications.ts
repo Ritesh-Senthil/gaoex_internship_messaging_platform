@@ -14,7 +14,7 @@
  */
 
 import { Platform, AppState, AppStateStatus } from 'react-native';
-import { pushTokenApi } from './api';
+import { pushTokenApi, getAccessToken } from './api';
 import { useNotificationStore } from '../store/notificationStore';
 
 // Lazy-load expo-notifications to avoid crash in Expo Go
@@ -255,9 +255,18 @@ export async function refreshPushTokenIfNeeded(): Promise<void> {
   if (!isAvailable()) return;
   if (Device && !Device.isDevice) return;
 
+  // Don't register after logout / session expiry
+  if (!getAccessToken()) return;
+
   try {
     const { status } = await Notifications!.getPermissionsAsync();
     if (status !== 'granted') return;
+
+    // Retry full registration if a prior attempt never stored a token.
+    if (!currentPushToken) {
+      await registerForPushNotifications();
+      return;
+    }
 
     const tokenData = await Notifications!.getExpoPushTokenAsync({
       projectId: '7b7d8aa7-feb3-4708-90f7-9a9ef01c2c97',

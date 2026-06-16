@@ -8,6 +8,7 @@ import conversationRoutes from './conversation.routes';
 import reactionRoutes from './reaction.routes';
 import uploadRoutes from './upload.routes';
 import searchRoutes from './search.routes';
+import forwardRoutes from './forward.routes';
 
 const router = Router();
 
@@ -38,6 +39,9 @@ router.use('/upload', uploadRoutes);
 // Search routes
 router.use('/search', searchRoutes);
 
+// Message forwarding
+router.use('/forward', forwardRoutes);
+
 // API info
 router.get('/', (req, res) => {
   res.json({
@@ -53,6 +57,7 @@ router.get('/', (req, res) => {
       messages: '/api/messages',
       upload: '/api/upload',
       search: '/api/search',
+      forward: '/api/forward',
     },
   });
 });

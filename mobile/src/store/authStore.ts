@@ -9,8 +9,9 @@ import { User, AuthTokens } from '../types';
 import { APP_CONFIG } from '../constants/config';
 import { authApi, loadTokens, clearTokens, userApi, setOnTokenRefreshFailed } from '../services/api';
 import { getIdToken, signOut as firebaseSignOut } from '../services/firebase';
-import { authenticateSocket, clearSocketAuth, disconnectSocket } from '../services/socket';
+import { authenticateSocket, clearSocketAuth, disconnectSocket, setOnAuthExhausted } from '../services/socket';
 import { registerForPushNotifications, unregisterPushNotifications } from '../services/notifications';
+import { resetSessionState } from '../utils/resetSessionState';
 
 interface AuthState {
   // State
@@ -28,7 +29,31 @@ interface AuthState {
   clearError: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set, get) => ({
+export const useAuthStore = create<AuthState>((set, get) => {
+  /** Shared local cleanup for explicit logout and forced session expiry. */
+  const performLocalLogout = async (options?: { skipFirebase?: boolean; skipSecureStoreUser?: boolean }) => {
+    resetSessionState();
+    clearSocketAuth();
+    disconnectSocket();
+    await clearTokens();
+    if (!options?.skipSecureStoreUser) {
+      try {
+        await SecureStore.deleteItemAsync(APP_CONFIG.STORAGE_KEYS.USER);
+      } catch {
+        // Best-effort
+      }
+    }
+    if (!options?.skipFirebase) {
+      try {
+        await firebaseSignOut();
+      } catch {
+        // Best-effort
+      }
+    }
+    set({ user: null, isAuthenticated: false, isLoading: false, error: null });
+  };
+
+  return {
   // Initial state
   user: null,
   isAuthenticated: false,
@@ -43,15 +68,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       set({ isLoading: true });
 
-      // Register callback so api.ts can trigger logout on refresh failure
-      setOnTokenRefreshFailed(() => {
+      const onSessionExpired = () => {
         const { isAuthenticated } = get();
         if (isAuthenticated) {
-          clearSocketAuth();
-          disconnectSocket();
-          set({ user: null, isAuthenticated: false, isLoading: false });
+          void performLocalLogout();
         }
-      });
+      };
+
+      // Register callbacks so api.ts / socket.ts can force logout on auth failure
+      setOnTokenRefreshFailed(onSessionExpired);
+      setOnAuthExhausted(onSessionExpired);
       
       // Try to load existing tokens
       const hasTokens = await loadTokens();
@@ -79,9 +105,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             return;
           }
         } catch (error) {
-          // Token invalid, clear and continue
+          // Token invalid — wipe stale client state from any prior session
           await clearTokens();
+          resetSessionState();
         }
+      } else {
+        resetSessionState();
       }
       
       set({
@@ -118,6 +147,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const response = await authApi.loginWithFirebase(idToken);
       
       if (response.success) {
+        // Clear any stale client state from a prior session before adopting the new user.
+        resetSessionState();
+        
         // Store user in secure storage for persistence
         await SecureStore.setItemAsync(
           APP_CONFIG.STORAGE_KEYS.USER,
@@ -161,33 +193,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // Unregister push token before losing auth
       await unregisterPushNotifications();
       
-      // Clear socket auth and disconnect
-      clearSocketAuth();
-      disconnectSocket();
+      // Logout from our backend (while tokens still valid)
+      try {
+        await authApi.logout();
+      } catch {
+        // Continue local cleanup even if backend logout fails
+      }
       
-      // Logout from our backend
-      await authApi.logout();
-      
-      // Logout from Firebase
-      await firebaseSignOut();
-      
-      // Clear stored user
-      await SecureStore.deleteItemAsync(APP_CONFIG.STORAGE_KEYS.USER);
-      
-      set({
-        user: null,
-        isAuthenticated: false,
-        isLoading: false,
-      });
-    } catch (error) {
-      // Even if logout fails, clear local state
-      clearSocketAuth();
-      disconnectSocket();
-      set({
-        user: null,
-        isAuthenticated: false,
-        isLoading: false,
-      });
+      await performLocalLogout();
+    } catch {
+      await performLocalLogout();
     }
   },
   
@@ -209,4 +224,5 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   clearError: () => {
     set({ error: null });
   },
-}));
+};
+});

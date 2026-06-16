@@ -26,11 +26,11 @@ import { conversationApi } from '../services/api';
 import { useUnreadStore } from '../store/unreadStore';
 import { useAuthStore } from '../store/authStore';
 import { useMuteStore } from '../store/muteStore';
+import { getActiveConversationId } from '../store/activeChatStore';
 import { 
   subscribeToUnreadEvents,
   subscribeToPresenceEvents,
   subscribeToGroupEvents,
-  shouldIgnoreEvent,
   UnreadDMEventData,
   UserOnlineEventData,
   UserOfflineEventData,
@@ -55,9 +55,6 @@ export default function ConversationsListScreen() {
   const { conversationUnreads, setAllConversationUnreads, incrementConversationUnread, markConversationRead } = useUnreadStore();
   const { user } = useAuthStore();
   const { conversationMutes, initConversationMutes } = useMuteStore();
-  
-  // Track which conversation user is currently viewing
-  const currentConversationId = useRef<string | null>(null);
 
   const fetchConversations = useCallback(async (showRefresh = false) => {
     try {
@@ -106,9 +103,7 @@ export default function ConversationsListScreen() {
         // Ignore if this is for a different user
         if (data.recipientUserId !== user?.id) return;
         // Ignore if we're currently in this conversation
-        if (currentConversationId.current === data.conversationId) return;
-        // Ignore if our socket should be excluded
-        if (shouldIgnoreEvent(data.excludeSocketIds)) return;
+        if (getActiveConversationId() === data.conversationId) return;
         
         // Update unread count
         incrementConversationUnread(data.conversationId);
@@ -270,8 +265,6 @@ export default function ConversationsListScreen() {
   // Refresh when screen comes into focus
   useFocusEffect(
     useCallback(() => {
-      // Clear current conversation when returning to list
-      currentConversationId.current = null;
       // Mute state updates come from the muteStore — no refetch needed
     }, [])
   );
@@ -279,8 +272,7 @@ export default function ConversationsListScreen() {
   const handleConversationPress = (conv: Conversation) => {
     // Optimistically mark conversation as read BEFORE navigating
     markConversationRead(conv.id);
-    currentConversationId.current = conv.id;
-    
+
     navigation.navigate('Conversation', {
       conversationId: conv.id,
       name: conv.name,

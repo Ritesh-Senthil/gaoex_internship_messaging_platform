@@ -21,13 +21,18 @@ import {
   Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRoute, RouteProp, useNavigation } from '@react-navigation/native';
+import { useRoute, RouteProp, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useHeaderHeight } from '@react-navigation/elements';
+import { Ionicons } from '@expo/vector-icons';
 
 import { colors, spacing, typography, borderRadius } from '../constants/theme';
-import { RootStackParamList, Message, DMMessage } from '../types';
-import { channelApi, conversationApi } from '../services/api';
+import { CHAT_LIST_PERF_PROPS } from '../constants/listPerf';
+import { RootStackParamList, Message, DMMessage, ThreadMessage } from '../types';
+import { channelApi, conversationApi, programApi, roleApi } from '../services/api';
 import { useAuthStore } from '../store/authStore';
+import { useConnectionStore } from '../store/connectionStore';
+import { useMessageStore, useCachedMessages, hasCachedMessages, mergeMessagesById, upsertMessage, newClientId } from '../store/messageStore';
 import {
   subscribeToChannelEvents,
   subscribeToConversationEvents,
@@ -48,6 +53,7 @@ import ReplyPreview from '../components/ReplyPreview';
 // Shared components
 import { ChatLoadingState } from '../components/ChatStates';
 import MessageActions from '../components/MessageActions';
+import { openForwardPicker } from '../utils/forwardMessage';
 import MarkdownText from '../components/MarkdownText';
 import ReactionBar from '../components/ReactionBar';
 import MessageInput from '../components/MessageInput';
@@ -57,21 +63,6 @@ import { formatMessageTime } from '../utils/dateFormatters';
 
 type RouteProps = RouteProp<RootStackParamList, 'Thread'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
-
-// Unified message type for both channel and DM thread replies
-interface ThreadMessage {
-  id: string;
-  content: string;
-  authorId: string;
-  authorName: string;
-  authorAvatar: string | null;
-  isEdited: boolean;
-  attachments: any[];
-  reactions: any[];
-  parentMessageId?: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
 
 function normalizeChannelMessage(msg: Message): ThreadMessage {
   return {
@@ -108,17 +99,33 @@ function normalizeDMMessage(msg: DMMessage): ThreadMessage {
 export default function ThreadScreen() {
   const route = useRoute<RouteProps>();
   const navigation = useNavigation<NavigationProp>();
-  const { messageId, channelId, conversationId, channelName, conversationName } = route.params;
+  const headerHeight = useHeaderHeight();
+  const { messageId, channelId, conversationId, channelName, conversationName, programId } = route.params;
   const { user } = useAuthStore();
 
   const isChannelThread = !!channelId;
 
+  // Program members/roles to resolve stable `<@id>` / `<@&id>` mention tokens
+  // (PE-04) into `@DisplayName` highlights in channel threads. Sourced the same
+  // way ChannelScreen does. DM threads carry no tokens, so these stay empty.
+  const [mentionUsers, setMentionUsers] = useState<{ id: string; displayName: string }[]>([]);
+  const [mentionRoles, setMentionRoles] = useState<{ id: string; name: string }[]>([]);
+
+  // --- Replies state (backed by the central cache — ST-01) ---
+  const cacheKey = `thread:${messageId}`;
   const [parentMessage, setParentMessage] = useState<ThreadMessage | null>(null);
-  const [replies, setReplies] = useState<ThreadMessage[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const replies = useCachedMessages<ThreadMessage>(cacheKey);
+  // setState-compatible dispatcher so existing fetch/socket/send/delete/reaction
+  // handlers (and the useReactions helpers) work unchanged against the cache.
+  const setReplies = useCallback(
+    (value: ThreadMessage[] | ((prev: ThreadMessage[]) => ThreadMessage[])) =>
+      useMessageStore.getState().setMessages<ThreadMessage>(cacheKey, value),
+    [cacheKey],
+  );
+  // Skip the full-screen spinner when we already have cached replies to show.
+  const [isLoading, setIsLoading] = useState(() => !hasCachedMessages(cacheKey));
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
-  const [isSending, setIsSending] = useState(false);
   const { messageText, setMessageText, clearDraft } = useDraft(`thread:${messageId}`);
   const [replyPreviewExpanded, setReplyPreviewExpanded] = useState(true);
 
@@ -148,6 +155,30 @@ export default function ThreadScreen() {
     });
   }, [navigation, isChannelThread, channelName, conversationName]);
 
+  // --- Fetch members + roles to resolve mention tokens (PE-04b) ---
+  // Only for channel threads with a known program; DM threads have no tokens.
+  useEffect(() => {
+    if (!isChannelThread || !programId) return;
+    let isMounted = true;
+    (async () => {
+      try {
+        const membersResponse = await programApi.getMembers(programId);
+        if (isMounted && membersResponse.success) {
+          setMentionUsers(membersResponse.data.members.map((m: any) => ({
+            id: m.userId, displayName: m.displayName,
+          })));
+        }
+        const rolesResponse = await roleApi.getRoles(programId);
+        if (isMounted && rolesResponse.success) {
+          setMentionRoles(rolesResponse.data.roles
+            .filter((r: any) => r.name !== '@everyone')
+            .map((r: any) => ({ id: r.id, name: r.name })));
+        }
+      } catch {}
+    })();
+    return () => { isMounted = false; };
+  }, [isChannelThread, programId]);
+
   // --- Fetch thread ---
   const fetchThread = useCallback(async (loadMore = false) => {
     try {
@@ -164,7 +195,7 @@ export default function ThreadScreen() {
         if (response.success) {
           const normalizedParent = normalizeChannelMessage(response.data.parentMessage);
           const normalizedReplies = response.data.replies.map(normalizeChannelMessage);
-          if (!loadMore) { setParentMessage(normalizedParent); setReplies(normalizedReplies); }
+          if (!loadMore) { setParentMessage(normalizedParent); setReplies(prev => mergeMessagesById(prev, normalizedReplies)); }
           else { setReplies(prev => [...normalizedReplies, ...prev]); }
           setHasMore(response.data.hasMore);
         }
@@ -173,7 +204,7 @@ export default function ThreadScreen() {
         if (response.success) {
           const normalizedParent = normalizeDMMessage(response.data.parentMessage);
           const normalizedReplies = response.data.replies.map(normalizeDMMessage);
-          if (!loadMore) { setParentMessage(normalizedParent); setReplies(normalizedReplies); }
+          if (!loadMore) { setParentMessage(normalizedParent); setReplies(prev => mergeMessagesById(prev, normalizedReplies)); }
           else { setReplies(prev => [...normalizedReplies, ...prev]); }
           setHasMore(response.data.hasMore);
         }
@@ -187,6 +218,59 @@ export default function ThreadScreen() {
   }, [messageId, channelId, conversationId, isChannelThread, hasMore, isLoadingMore, replies]);
 
   useEffect(() => { fetchThread(); }, [messageId]);
+
+  // --- Catch-up: refetch the latest page of thread replies and merge into the
+  // cache (RT-01). Runs in the background (no spinner) when the screen regains
+  // focus or the socket reconnects, so replies/edits missed while the thread was
+  // backgrounded appear. Threads are small and the merge is purely additive, so
+  // mergeMessagesById is used instead of reconcileCatchUp — its gap/prune
+  // semantics are tuned for newest-first channel pagination and would risk
+  // pruning thread replies. Pending optimistic replies (clientId / temp-* id)
+  // carry ids the server never returns, so the merge leaves them untouched.
+  const catchUp = useCallback(async () => {
+    try {
+      if (isChannelThread && channelId) {
+        const response = await channelApi.getThreadReplies(messageId, { limit: 50 });
+        if (!response.success) return;
+        setParentMessage(normalizeChannelMessage(response.data.parentMessage));
+        const incoming = response.data.replies.map(normalizeChannelMessage);
+        const prev = (useMessageStore.getState().slices[cacheKey] as ThreadMessage[] | undefined) ?? [];
+        setReplies(mergeMessagesById(prev, incoming));
+      } else if (conversationId) {
+        const response = await conversationApi.getThreadReplies(conversationId, messageId, { limit: 50 });
+        if (!response.success) return;
+        setParentMessage(normalizeDMMessage(response.data.parentMessage));
+        const incoming = response.data.replies.map(normalizeDMMessage);
+        const prev = (useMessageStore.getState().slices[cacheKey] as ThreadMessage[] | undefined) ?? [];
+        setReplies(mergeMessagesById(prev, incoming));
+      }
+    } catch {
+      // Best-effort; live socket events and the next focus will reconcile.
+    }
+  }, [isChannelThread, channelId, conversationId, messageId, cacheKey, setReplies]);
+
+  // Re-focus catch-up (skip the first focus — the initial fetch above covers it).
+  const skipFirstFocus = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (skipFirstFocus.current) { skipFirstFocus.current = false; return; }
+      catchUp();
+    }, [catchUp]),
+  );
+
+  // Reconnect catch-up: assume connected at mount so the initial connect doesn't
+  // double-fetch; only a genuine reconnect after a drop triggers a catch-up.
+  const wasConnected = useRef(true);
+  useEffect(() => {
+    const unsub = useConnectionStore.subscribe((state) => {
+      if (state.status === 'connected') {
+        if (!wasConnected.current) { wasConnected.current = true; catchUp(); }
+      } else {
+        wasConnected.current = false;
+      }
+    });
+    return unsub;
+  }, [catchUp]);
 
   // --- Socket events ---
   useEffect(() => {
@@ -263,35 +347,66 @@ export default function ThreadScreen() {
     }
   }, [messageId, channelId, conversationId, isChannelThread, user?.id, navigation, applyReactionAdded, applyReactionRemoved]);
 
-  // --- Send reply ---
-  const handleSendReply = async () => {
-    const content = messageText.trim();
-    if (!content || isSending) return;
-    clearDraft();
-    Keyboard.dismiss();
-    setIsSending(true);
-
+  // --- Send reply (optimistic — UX-01) ---
+  // Fire the actual request for an optimistic reply and reconcile the result.
+  // Used by both first-send and retry (same clientId so it dedupes on the server
+  // echo). Marks the row 'failed' on error so it can be retried.
+  const deliverThreadReply = useCallback(async (content: string, clientId: string) => {
+    setReplies(prev => prev.map(r =>
+      r.clientId === clientId ? { ...r, sendStatus: 'sending' as const } : r,
+    ));
     try {
       if (isChannelThread && channelId) {
-        const response = await channelApi.sendMessage(channelId, content, messageId);
-        if (response.success) {
-          const normalized = normalizeChannelMessage(response.data.message);
-          setReplies(prev => prev.some(r => r.id === normalized.id) ? prev : [...prev, normalized]);
-        }
+        const response = await channelApi.sendMessage(channelId, content, messageId, clientId);
+        if (!response.success) throw new Error('send failed');
+        const normalized = { ...normalizeChannelMessage(response.data.message), clientId, sendStatus: undefined };
+        setReplies(prev => upsertMessage(prev, normalized));
       } else if (conversationId) {
-        const response = await conversationApi.sendMessage(conversationId, content, messageId);
-        if (response.success) {
-          const normalized = normalizeDMMessage(response.data.message);
-          setReplies(prev => prev.some(r => r.id === normalized.id) ? prev : [...prev, normalized]);
-        }
+        const response = await conversationApi.sendMessage(conversationId, content, messageId, clientId);
+        if (!response.success) throw new Error('send failed');
+        const normalized = { ...normalizeDMMessage(response.data.message), clientId, sendStatus: undefined };
+        setReplies(prev => upsertMessage(prev, normalized));
       }
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     } catch {
-      Alert.alert('Error', 'Failed to send reply');
-      setMessageText(content);
-    } finally {
-      setIsSending(false);
+      setReplies(prev => prev.map(r =>
+        r.clientId === clientId ? { ...r, sendStatus: 'failed' as const } : r,
+      ));
     }
+  }, [isChannelThread, channelId, conversationId, messageId, setReplies]);
+
+  const handleRetryReply = useCallback((reply: ThreadMessage) => {
+    if (!reply.clientId) return;
+    deliverThreadReply(reply.content, reply.clientId);
+  }, [deliverThreadReply]);
+
+  const handleSendReply = () => {
+    const content = messageText.trim();
+    if (!content) return;
+    Keyboard.dismiss();
+
+    // Optimistic reply: render immediately, then reconcile in the background.
+    const clientId = newClientId();
+    const now = new Date().toISOString();
+    const optimistic: ThreadMessage = {
+      id: `temp-${clientId}`,
+      clientId,
+      sendStatus: 'sending',
+      content,
+      authorId: user?.id ?? '',
+      authorName: user?.displayName ?? 'You',
+      authorAvatar: user?.avatarUrl ?? null,
+      isEdited: false,
+      attachments: [],
+      reactions: [],
+      parentMessageId: messageId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    isNearBottom.current = true;
+    setReplies(prev => [...prev, optimistic]);
+    clearDraft();
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+    deliverThreadReply(content, clientId);
   };
 
   // --- Delete ---
@@ -341,7 +456,15 @@ export default function ThreadScreen() {
           </View>
         </View>
         <View style={styles.parentContent}>
-          {parentMessage.content ? <MarkdownText style={styles.parentText}>{parentMessage.content}</MarkdownText> : null}
+          {parentMessage.content ? (
+            <MarkdownText
+              style={styles.parentText}
+              mentionUsers={mentionUsers}
+              mentionRoles={mentionRoles}
+            >
+              {parentMessage.content}
+            </MarkdownText>
+          ) : null}
           {parentMessage.attachments.length > 0 && <AttachmentList attachments={parentMessage.attachments} />}
           {parentMessage.isEdited && <Text style={styles.editedLabel}>(edited)</Text>}
           {parentMessage.reactions.length > 0 && (
@@ -365,12 +488,20 @@ export default function ThreadScreen() {
   const renderReply = ({ item }: { item: ThreadMessage }) => (
     <TouchableOpacity style={styles.replyContainer} onLongPress={() => openActions(item)} delayLongPress={300} activeOpacity={0.8}>
       <UserAvatar name={item.authorName} avatarUrl={item.authorAvatar} size={32} style={{ marginRight: spacing.sm, marginTop: 2 }} />
-      <View style={styles.replyContent}>
+      <View style={[styles.replyContent, item.sendStatus === 'sending' && styles.replyContentSending]}>
         <View style={styles.replyHeader}>
           <Text style={styles.replyAuthorName}>{item.authorName}</Text>
           <Text style={styles.replyTimestamp}>{formatMessageTime(item.createdAt)}</Text>
         </View>
-        {item.content ? <MarkdownText style={styles.replyText}>{item.content}</MarkdownText> : null}
+        {item.content ? (
+          <MarkdownText
+            style={styles.replyText}
+            mentionUsers={mentionUsers}
+            mentionRoles={mentionRoles}
+          >
+            {item.content}
+          </MarkdownText>
+        ) : null}
         {item.attachments.length > 0 && <AttachmentList attachments={item.attachments} />}
         {item.isEdited && <Text style={styles.editedLabel}>(edited)</Text>}
         {item.reactions.length > 0 && (
@@ -381,21 +512,32 @@ export default function ThreadScreen() {
             onAddReaction={() => openActions(item)}
           />
         )}
+        {item.sendStatus === 'sending' && (
+          <Text style={styles.sendStatusSending}>Sending…</Text>
+        )}
+        {item.sendStatus === 'failed' && (
+          <TouchableOpacity onPress={() => handleRetryReply(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+            <Text style={styles.sendStatusFailed}>
+              <Ionicons name="alert-circle" size={12} color={colors.error} /> Failed to send. Tap to retry.
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
     </TouchableOpacity>
   );
 
-  if (isLoading) return <ChatLoadingState />;
+  if (isLoading && replies.length === 0) return <ChatLoadingState />;
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <KeyboardAvoidingView style={styles.keyboardAvoid} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
+      <KeyboardAvoidingView style={styles.keyboardAvoid} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}>
         <ConnectionBanner />
         <FlatList
           ref={flatListRef}
           data={replies}
-          keyExtractor={item => item.id}
+          keyExtractor={item => item.clientId ?? item.id}
           renderItem={renderReply}
+          {...CHAT_LIST_PERF_PROPS}
           keyboardDismissMode="on-drag"
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
@@ -457,7 +599,7 @@ export default function ThreadScreen() {
               onChangeText={setMessageText}
               onSend={handleSendReply}
               placeholder="Reply..."
-              isSending={isSending}
+              isSending={false}
               users={[]}
               roles={[]}
               includeSpecialMentions={false}
@@ -476,6 +618,14 @@ export default function ThreadScreen() {
         onQuickReact={(emoji) => {
           if (selectedMessage) handleAddReactionThread(selectedMessage.id, emoji);
         }}
+        onForward={selectedMessage ? () => {
+          openForwardPicker(
+            navigation,
+            selectedMessage,
+            selectedMessage.authorName,
+            { channelId, conversationId },
+          );
+        } : undefined}
       />
     </SafeAreaView>
   );
@@ -503,10 +653,13 @@ const styles = StyleSheet.create({
   // Replies
   replyContainer: { flexDirection: 'row', paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
   replyContent: { flex: 1 },
+  replyContentSending: { opacity: 0.6 },
   replyHeader: { flexDirection: 'row', alignItems: 'baseline' },
   replyAuthorName: { fontSize: typography.fontSize.md, fontWeight: typography.fontWeight.semibold, color: colors.text, marginRight: spacing.sm },
   replyTimestamp: { fontSize: typography.fontSize.xs, color: colors.textMuted },
   replyText: { fontSize: typography.fontSize.md, color: colors.text, lineHeight: 22, marginTop: 2 },
+  sendStatusSending: { fontSize: typography.fontSize.xs, color: colors.textMuted, marginTop: 2 },
+  sendStatusFailed: { fontSize: typography.fontSize.xs, color: colors.error, marginTop: 2 },
 
   // Load more
   loadMoreButton: { alignItems: 'center', paddingVertical: spacing.sm },

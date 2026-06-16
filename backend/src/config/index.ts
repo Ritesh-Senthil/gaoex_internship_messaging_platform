@@ -17,7 +17,6 @@ export const config = {
   // JWT (for our own access tokens after Firebase auth)
   jwt: {
     accessSecret: process.env.JWT_ACCESS_SECRET || 'dev-access-secret',
-    refreshSecret: process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret',
     accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m',
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
   },
@@ -46,27 +45,36 @@ export const config = {
     max: 100, // limit each IP to 100 requests per windowMs
   },
 
-  // Auth rate limiting (stricter)
+  // Auth (login) rate limiting — IP based. Kept moderate because a cohort can
+  // share one NAT IP (SEC-06).
   authRateLimit: {
     windowMs: 60 * 1000, // 1 minute
-    max: 5, // 5 requests per minute
+    max: 30, // 30 sign-in attempts per minute per IP
   },
 } as const;
 
 // Validate required environment variables in production
 export function validateConfig(): void {
+  if (config.nodeEnv !== 'production') return;
+
   const requiredInProduction = [
     'DATABASE_URL',
     'JWT_ACCESS_SECRET',
-    'JWT_REFRESH_SECRET',
+    // Firebase Admin credentials are required to verify sign-ins (INF-04).
+    'FIREBASE_PROJECT_ID',
+    'FIREBASE_CLIENT_EMAIL',
+    'FIREBASE_PRIVATE_KEY',
   ];
 
-  if (config.nodeEnv === 'production') {
-    for (const key of requiredInProduction) {
-      if (!process.env[key]) {
-        throw new Error(`Missing required environment variable: ${key}`);
-      }
+  for (const key of requiredInProduction) {
+    if (!process.env[key]) {
+      throw new Error(`Missing required environment variable: ${key}`);
     }
+  }
+
+  // Never allow development default secrets in production (SEC-09).
+  if (config.jwt.accessSecret === 'dev-access-secret') {
+    throw new Error('JWT secrets must not use development defaults in production');
   }
 }
 

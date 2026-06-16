@@ -23,14 +23,25 @@ interface MarkdownTextProps {
   style?: TextStyle;
   mentionedUsers?: string[];
   mentionedRoles?: string[];
+  /**
+   * Program members/roles used to resolve stable `<@id>` / `<@&id>` tokens
+   * (PE-04) back into `@DisplayName` highlights. Optional — when omitted, token
+   * resolution is skipped and legacy `@Name` mentions still render.
+   */
+  mentionUsers?: { id: string; displayName: string }[];
+  mentionRoles?: { id: string; name: string }[];
   mentionEveryone?: boolean;
   onMentionPress?: (type: 'user' | 'role' | 'everyone', id?: string) => void;
 }
+
+// id → resolved mention info for `<@id>` / `<@&id>` tokens.
+type TokenMap = Map<string, { name: string; type: 'user' | 'role' }>;
 
 interface TextSegment {
   type: 'text' | 'bold' | 'italic' | 'strikethrough' | 'code' | 'codeblock' | 'mention';
   content: string;
   mentionType?: 'user' | 'role' | 'everyone' | 'here';
+  mentionId?: string;
 }
 
 export default function MarkdownText({
@@ -38,6 +49,8 @@ export default function MarkdownText({
   style,
   mentionedUsers = [],
   mentionedRoles = [],
+  mentionUsers = [],
+  mentionRoles = [],
   mentionEveryone = false,
   onMentionPress,
 }: MarkdownTextProps) {
@@ -60,7 +73,18 @@ export default function MarkdownText({
     return set;
   }, [mentionedUsers, mentionedRoles]);
 
-  const segments = useMemo(() => parseMarkdown(children, validMentions), [children, validMentions]);
+  // Map stable token ids → display name + type (PE-04).
+  const tokenMap = useMemo<TokenMap>(() => {
+    const map: TokenMap = new Map();
+    mentionUsers.forEach(u => map.set(u.id, { name: u.displayName, type: 'user' }));
+    mentionRoles.forEach(r => map.set(r.id, { name: r.name, type: 'role' }));
+    return map;
+  }, [mentionUsers, mentionRoles]);
+
+  const segments = useMemo(
+    () => parseMarkdown(children, validMentions, tokenMap),
+    [children, validMentions, tokenMap],
+  );
 
   const renderSegment = (segment: TextSegment, index: number) => {
     switch (segment.type) {
@@ -105,7 +129,8 @@ export default function MarkdownText({
               if (onMentionPress && segment.mentionType) {
                 onMentionPress(
                   segment.mentionType === 'here' ? 'everyone' : segment.mentionType,
-                  displayContent.replace('@', '')
+                  // Prefer the stable id (PE-04 tokens); fall back to the name.
+                  segment.mentionId ?? displayContent.replace('@', '')
                 );
               }
             }}
@@ -146,7 +171,7 @@ export default function MarkdownText({
   );
 }
 
-function parseMarkdown(text: string, validMentions: Set<string>): TextSegment[] {
+function parseMarkdown(text: string, validMentions: Set<string>, tokenMap: TokenMap): TextSegment[] {
   const segments: TextSegment[] = [];
   
   // Check for code blocks first (```...```)
@@ -192,14 +217,14 @@ function parseMarkdown(text: string, validMentions: Set<string>): TextSegment[] 
     if (part.isCodeBlock) {
       segments.push({ type: 'codeblock', content: part.content });
     } else {
-      segments.push(...parseInlineMarkdown(part.content, validMentions));
+      segments.push(...parseInlineMarkdown(part.content, validMentions, tokenMap));
     }
   }
   
   return segments;
 }
 
-function parseInlineMarkdown(text: string, validMentions: Set<string>): TextSegment[] {
+function parseInlineMarkdown(text: string, validMentions: Set<string>, tokenMap: TokenMap): TextSegment[] {
   const segments: TextSegment[] = [];
   
   // Combined regex for all inline patterns (excluding mentions - handled separately)
@@ -214,13 +239,15 @@ function parseInlineMarkdown(text: string, validMentions: Set<string>): TextSegm
   
   // Mention regex - matches @ followed by word chars and non-breaking spaces
   const mentionRegex = /@([\w\u00A0]+)/g;
+  // Stable mention tokens (PE-04): <@userId> and <@&roleId>.
+  const tokenRegex = /<@(&)?([^>\s]+)>/g;
   
   // Simple approach: process text sequentially
   let remaining = text;
   let result: TextSegment[] = [];
   
   while (remaining.length > 0) {
-    let earliestMatch: { index: number; length: number; content: string; type: TextSegment['type']; mentionType?: TextSegment['mentionType'] } | null = null;
+    let earliestMatch: { index: number; length: number; content: string; type: TextSegment['type']; mentionType?: TextSegment['mentionType']; mentionId?: string } | null = null;
     
     // Check formatting patterns
     for (const pattern of patterns) {
@@ -233,6 +260,33 @@ function parseInlineMarkdown(text: string, validMentions: Set<string>): TextSegm
           content: match[1],
           type: pattern.type,
         };
+      }
+    }
+
+    // Check for stable mention tokens first (PE-04). A resolvable token wins over
+    // a later formatting match; an unresolvable one is rendered as plain text.
+    tokenRegex.lastIndex = 0;
+    const tokenMatch = tokenRegex.exec(remaining);
+    if (tokenMatch && (!earliestMatch || tokenMatch.index < earliestMatch.index)) {
+      const id = tokenMatch[2];
+      const resolved = tokenMap.get(id);
+      if (resolved) {
+        earliestMatch = {
+          index: tokenMatch.index,
+          length: tokenMatch[0].length,
+          content: `@${resolved.name}`,
+          type: 'mention',
+          mentionType: resolved.type,
+          mentionId: id,
+        };
+      } else {
+        // Unknown id (e.g. token rendered without member/role context): emit the
+        // text before it, drop the raw token, and continue.
+        if (tokenMatch.index > 0) {
+          result.push({ type: 'text', content: remaining.slice(0, tokenMatch.index) });
+        }
+        remaining = remaining.slice(tokenMatch.index + tokenMatch[0].length);
+        continue;
       }
     }
     
@@ -278,6 +332,7 @@ function parseInlineMarkdown(text: string, validMentions: Set<string>): TextSegm
         type: earliestMatch.type,
         content: earliestMatch.content,
         mentionType: earliestMatch.mentionType,
+        mentionId: earliestMatch.mentionId,
       });
       remaining = remaining.slice(earliestMatch.index + earliestMatch.length);
     } else {

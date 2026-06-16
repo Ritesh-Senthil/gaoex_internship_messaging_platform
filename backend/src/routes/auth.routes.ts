@@ -1,12 +1,24 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
 import { prisma } from '../config/database';
 import { verifyFirebaseToken } from '../config/firebase';
 import { generateTokens } from '../utils/jwt';
 import { BadRequestError, UnauthorizedError, ForbiddenError } from '../middleware/errorHandler';
 import { authenticate } from '../middleware/auth';
+import { loginRateLimiter } from '../middleware/rateLimit';
+import { validateBody } from '../middleware/validate';
 import { PermissionPresets } from '../utils/permissions';
 
 const router = Router();
+
+// ── Validation schemas (SEC-07) ──
+const firebaseAuthSchema = z.object({
+  idToken: z.string().min(1, 'Firebase ID token is required'),
+});
+
+const refreshSchema = z.object({
+  refreshToken: z.string().min(1, 'Refresh token is required'),
+});
 
 /**
  * POST /api/auth/firebase
@@ -18,7 +30,7 @@ const router = Router();
  * We verify the token, create/update user in our database,
  * and return our own JWT tokens for API access.
  */
-router.post('/firebase', async (req: Request, res: Response, next: NextFunction) => {
+router.post('/firebase', loginRateLimiter, validateBody(firebaseAuthSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { idToken } = req.body;
 
@@ -169,7 +181,7 @@ router.post('/firebase', async (req: Request, res: Response, next: NextFunction)
  * POST /api/auth/refresh
  * Refresh access token using refresh token
  */
-router.post('/refresh', async (req: Request, res: Response, next: NextFunction) => {
+router.post('/refresh', validateBody(refreshSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { refreshToken } = req.body;
 

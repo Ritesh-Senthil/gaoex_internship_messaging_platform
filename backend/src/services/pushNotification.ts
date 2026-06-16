@@ -7,6 +7,7 @@
 
 import Expo, { ExpoPushMessage, ExpoPushTicket, ExpoPushReceipt } from 'expo-server-sdk';
 import { prisma } from '../config/database';
+import { getUserIdsActiveInRoom } from '../utils/socketPresence';
 
 // Create a single Expo SDK client (reuse across requests)
 const expo = new Expo();
@@ -65,6 +66,18 @@ export async function sendPushToUsers(
 
   if (targetUserIds.length === 0) {
     return { sent: 0, failed: 0, skipped: 0 };
+  }
+
+  // Skip users actively viewing this channel/conversation (they already see the message).
+  if (options?.excludeActiveInRoom) {
+    const activeUserIds = await getUserIdsActiveInRoom(options.excludeActiveInRoom);
+    if (activeUserIds.size > 0) {
+      targetUserIds = targetUserIds.filter(id => !activeUserIds.has(id));
+    }
+  }
+
+  if (targetUserIds.length === 0) {
+    return { sent: 0, failed: 0, skipped: userIds.length };
   }
 
   // Look up push tokens for these users

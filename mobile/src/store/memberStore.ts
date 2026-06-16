@@ -157,6 +157,8 @@ export const useMemberStore = create<MemberState>((set) => ({
   },
 }));
 
+const EMPTY_MEMBERS: Member[] = [];
+
 // Selector hooks
-export const useProgramMembers = (programId: string) => 
-  useMemberStore((state) => state.membersByProgram[programId] || []);
+export const useProgramMembers = (programId: string) =>
+  useMemberStore((state) => state.membersByProgram[programId] ?? EMPTY_MEMBERS);

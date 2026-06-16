@@ -51,78 +51,81 @@ export default function MessageInput({
   maxLength = 4000,
   canSendOverride,
 }: MessageInputProps) {
-  const [cursorPosition, setCursorPosition] = useState(0);
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<MentionSuggestion[]>([]);
+  // Controlled selection — only set transiently to reposition the caret after a
+  // mention is inserted, then cleared so the user regains normal control.
+  const [selection, setSelection] = useState<{ start: number; end: number } | undefined>(undefined);
   const inputRef = useRef<TextInput>(null);
+  // After send, iOS may commit a pending autocorrect to the native field and fire
+  // onChangeText even though we already cleared the controlled value. Swallow those
+  // stale events so the corrected text doesn't reappear as a draft.
+  const ignoreChangeCountRef = useRef(0);
+  // Latest known caret position (start of selection), kept in a ref to avoid
+  // stale-closure issues between onChangeText and onSelectionChange.
+  const caretRef = useRef(0);
+  // The text range [start, end) of the @mention currently being typed, so we
+  // replace exactly that span (not the last '@' in the whole string).
+  const mentionRangeRef = useRef<{ start: number; end: number } | null>(null);
+
+  // Detect a mention at the given caret position and refresh suggestions.
+  const refreshMention = useCallback((text: string, caret: number) => {
+    const query = detectMentionQuery(text, caret);
+    if (query !== null) {
+      // query === text.slice(atIndex + 1, caret) → atIndex = caret - query.length - 1
+      mentionRangeRef.current = { start: caret - query.length - 1, end: caret };
+      setSuggestions(filterMentionSuggestions(query, users, roles, includeSpecialMentions));
+    } else {
+      mentionRangeRef.current = null;
+      setSuggestions([]);
+    }
+  }, [users, roles, includeSpecialMentions]);
 
   const handleSelectionChange = useCallback((
     event: NativeSyntheticEvent<TextInputSelectionChangeEventData>
   ) => {
     const { start } = event.nativeEvent.selection;
-    setCursorPosition(start);
-    
-    // Check for mention query
-    const query = detectMentionQuery(value, start);
-    setMentionQuery(query);
-    
-    if (query !== null) {
-      const filtered = filterMentionSuggestions(query, users, roles, includeSpecialMentions);
-      setSuggestions(filtered);
-    } else {
-      setSuggestions([]);
-    }
-  }, [value, users, roles, includeSpecialMentions]);
+    caretRef.current = start;
+    // Release the transiently-controlled selection so typing isn't pinned.
+    if (selection) setSelection(undefined);
+    refreshMention(value, start);
+  }, [value, selection, refreshMention]);
 
   const handleTextChange = useCallback((text: string) => {
-    onChangeText(text);
-    
-    // Re-detect mention query with estimated cursor position
-    const query = detectMentionQuery(text, text.length);
-    setMentionQuery(query);
-    
-    if (query !== null) {
-      const filtered = filterMentionSuggestions(query, users, roles, includeSpecialMentions);
-      setSuggestions(filtered);
-    } else {
-      setSuggestions([]);
+    if (ignoreChangeCountRef.current > 0) {
+      ignoreChangeCountRef.current--;
+      return;
     }
-  }, [onChangeText, users, roles, includeSpecialMentions]);
+
+    // onChangeText doesn't report the caret, so estimate it from the edit delta
+    // relative to the previous value. onSelectionChange corrects it immediately
+    // after, but this keeps mid-text edits accurate in the meantime.
+    const delta = text.length - value.length;
+    const estimatedCaret = Math.max(0, Math.min(text.length, caretRef.current + delta));
+    caretRef.current = estimatedCaret;
+
+    onChangeText(text);
+    refreshMention(text, estimatedCaret);
+  }, [value, onChangeText, refreshMention]);
 
   const handleSelectMention = useCallback((suggestion: MentionSuggestion) => {
-    // Find the last @ symbol in the text - this is what triggered the mention
-    const atIndex = value.lastIndexOf('@');
-    
-    if (atIndex === -1) return;
-    
-    // Everything before the @ stays
-    const beforeMention = value.slice(0, atIndex);
-    
-    // Find where the partial mention query ends (at space or end of string)
-    let queryEndIndex = value.length;
-    for (let i = atIndex + 1; i < value.length; i++) {
-      if (value[i] === ' ') {
-        queryEndIndex = i;
-        break;
-      }
-    }
-    
-    // Everything after the query (if any) is preserved
-    const afterMention = value.slice(queryEndIndex);
-    
-    // Build new text: before + mention + after
-    let newText = `${beforeMention}${suggestion.insertText}${afterMention}`;
-    
-    // Ensure there's a space after the mention if nothing follows
-    if (afterMention.length === 0 && !newText.endsWith(' ')) {
-      newText += ' ';
-    }
-    
-    onChangeText(newText);
-    setMentionQuery(null);
+    const range = mentionRangeRef.current;
+    if (!range) return;
+
+    const before = value.slice(0, range.start);
+    const after = value.slice(range.end);
+
+    // Ensure a single space follows the inserted mention.
+    const needsSpace = after.length === 0 || after[0] !== ' ';
+    const insert = needsSpace ? `${suggestion.insertText} ` : suggestion.insertText;
+    const newText = `${before}${insert}${after}`;
+    const newCaret = before.length + insert.length;
+
+    mentionRangeRef.current = null;
     setSuggestions([]);
-    
-    // Keep focus on input
+    caretRef.current = newCaret;
+    onChangeText(newText);
+    // Position the caret right after the inserted mention.
+    setSelection({ start: newCaret, end: newCaret });
     inputRef.current?.focus();
   }, [value, onChangeText]);
 
@@ -130,8 +133,15 @@ export default function MessageInput({
     const canSendNow = canSendOverride !== undefined ? canSendOverride : value.trim().length > 0;
     if (canSendNow && !isSending) {
       setSuggestions([]);
-      setMentionQuery(null);
+      mentionRangeRef.current = null;
+      // Parent clears the draft synchronously in onSend; ignore the autocorrect
+      // onChangeText iOS often emits right after (sometimes twice).
+      ignoreChangeCountRef.current = 2;
       onSend();
+      // Keep the native field in sync with the cleared controlled value.
+      requestAnimationFrame(() => {
+        inputRef.current?.setNativeProps({ text: '' });
+      });
     }
   }, [value, isSending, onSend, canSendOverride]);
 
@@ -153,6 +163,7 @@ export default function MessageInput({
           ref={inputRef}
           style={styles.input}
           value={value}
+          selection={selection}
           onChangeText={handleTextChange}
           onSelectionChange={handleSelectionChange}
           placeholder={placeholder}

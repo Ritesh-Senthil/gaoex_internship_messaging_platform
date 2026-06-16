@@ -10,6 +10,16 @@ import { authenticate } from '../middleware/auth';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../middleware/errorHandler';
 import { Permissions, hasPermission } from '../utils/permissions';
 import { getUserPermissions } from '../utils/roleHelpers';
+import { canAccessChannel } from '../utils/access';
+import {
+  resolveChannelMentions,
+  collectChannelMentionRecipients,
+  incrementMentionCounts,
+  emitChannelUnreadEvents,
+  pushChannelMessage,
+} from '../services/messageDispatch';
+import { sendPushToUsers, buildDMNotification } from '../services/pushNotification';
+import { messageRateLimiter } from '../middleware/rateLimit';
 import {
   supabase,
   STORAGE_BUCKET,
@@ -44,6 +54,7 @@ const upload = multer({
 router.post(
   '/channel/:channelId',
   authenticate,
+  messageRateLimiter,
   upload.array('files', MAX_FILES_PER_MESSAGE),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -59,7 +70,14 @@ router.post(
       // Verify channel exists and user has access
       const channel = await prisma.channel.findUnique({
         where: { id: channelId },
-        select: { id: true, programId: true },
+        select: {
+          id: true,
+          programId: true,
+          type: true,
+          name: true,
+          isPrivate: true,
+          program: { select: { name: true } },
+        },
       });
 
       if (!channel) {
@@ -75,10 +93,20 @@ router.post(
         throw new ForbiddenError('You are not a member of this program');
       }
 
+      // Private channel access (SEC-03)
+      if (channel.isPrivate && !(await canAccessChannel(userId, channelId, req.user!.isSuperAdmin))) {
+        throw new ForbiddenError('You do not have access to this private channel');
+      }
+
       // Check ATTACH_FILES permission
       const userPerms = await getUserPermissions(userId, channel.programId, req.user!.isSuperAdmin);
       if (!hasPermission(userPerms, Permissions.ATTACH_FILES)) {
         throw new ForbiddenError('You do not have permission to upload files');
+      }
+
+      // Announcement channels require SEND_IN_ANNOUNCEMENTS to post at all
+      if (channel.type === 'ANNOUNCEMENT' && !hasPermission(userPerms, Permissions.SEND_IN_ANNOUNCEMENTS)) {
+        throw new ForbiddenError('You do not have permission to post in announcement channels');
       }
 
       // Validate file sizes
@@ -122,12 +150,20 @@ router.post(
         });
       }
 
-      // Create message with attachments
+      // Resolve mentions from the optional caption (@everyone gated — SEC-04)
+      const caption = content || '';
+      const canMentionEveryone = hasPermission(userPerms, Permissions.MENTION_EVERYONE);
+      const mentions = await resolveChannelMentions(caption, channel.programId, canMentionEveryone);
+
+      // Create message with attachments + mention metadata
       const message = await prisma.message.create({
         data: {
-          content: content || '',
+          content: caption,
           authorId: userId,
           channelId,
+          mentionedUsers: mentions.mentionedUsers,
+          mentionedRoles: mentions.mentionedRoles,
+          mentionEveryone: mentions.mentionEveryone,
           attachments: {
             create: uploadedFiles,
           },
@@ -152,6 +188,14 @@ router.post(
         },
       });
 
+      // Bump unread mention counters for mentioned users (RT-03 parity with text).
+      const mentionRecipientIds = await collectChannelMentionRecipients(
+        channel.programId,
+        mentions,
+        userId,
+      );
+      await incrementMentionCounts(prisma, channelId, mentionRecipientIds);
+
       // Format response to match Message interface
       const formattedMessage = {
         id: message.id,
@@ -161,9 +205,9 @@ router.post(
         channelId: message.channelId,
         conversationId: null,
         parentMessageId: message.parentMessageId ?? null,
-        mentionedUsers: [],
-        mentionedRoles: [],
-        mentionEveryone: false,
+        mentionedUsers: mentions.mentionedUsers,
+        mentionedRoles: mentions.mentionedRoles,
+        mentionEveryone: mentions.mentionEveryone,
         isEdited: message.isEdited,
         isPinned: message.isPinned,
         attachments: message.attachments.map(att => ({
@@ -179,11 +223,31 @@ router.post(
         updatedAt: message.updatedAt,
       };
 
-      // Emit socket event
+      // Emit socket event + unread events (RT-03)
       const io = req.app.get('io');
       if (io) {
         io.to(`channel:${channelId}`).emit('new_message', formattedMessage);
+        emitChannelUnreadEvents(io, {
+          channelId,
+          programId: channel.programId,
+          authorId: userId,
+          mentionRecipientIds,
+        });
       }
+
+      // Push notifications (fire-and-forget) — uploads notify like text (RT-03)
+      pushChannelMessage({
+        channelId,
+        programId: channel.programId,
+        channelName: channel.name,
+        programName: channel.program.name,
+        authorId: userId,
+        authorName: message.author.displayName,
+        content: caption,
+        mentions,
+        mentionRecipientIds,
+        hasAttachments: true,
+      });
 
       res.status(201).json({
         success: true,
@@ -203,6 +267,7 @@ router.post(
 router.post(
   '/conversation/:conversationId',
   authenticate,
+  messageRateLimiter,
   upload.array('files', MAX_FILES_PER_MESSAGE),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -323,14 +388,52 @@ router.post(
         updatedAt: message.updatedAt,
       };
 
-      // Emit socket event
+      // Emit socket event + unread events for other participants (RT-03)
       const io = req.app.get('io');
       if (io) {
         io.to(`conversation:${conversationId}`).emit('new_dm_message', {
           conversationId,
           message: formattedMessage,
         });
+
+        const otherParticipants = await prisma.conversationParticipant.findMany({
+          where: { conversationId, userId: { not: userId } },
+          select: { userId: true },
+        });
+        for (const p of otherParticipants) {
+          // Exclude sockets already in the conversation room server-side (RT-02).
+          io.to(`user:${p.userId}`)
+            .except(`conversation:${conversationId}`)
+            .emit('unread:dm', {
+              conversationId,
+              recipientUserId: p.userId,
+              senderId: userId,
+            });
+        }
       }
+
+      // Push notifications (fire-and-forget) — DM uploads notify like text (RT-03)
+      (async () => {
+        try {
+          const recipients = await prisma.conversationParticipant.findMany({
+            where: { conversationId, userId: { not: userId }, isMuted: false },
+            select: { userId: true },
+          });
+          const recipientIds = recipients.map((p) => p.userId);
+          if (recipientIds.length === 0) return;
+          await sendPushToUsers(
+            recipientIds,
+            buildDMNotification({
+              authorName: message.author.displayName,
+              messagePreview: (content || '').trim() || '📎 Sent an attachment',
+              conversationId,
+            }),
+            { excludeActiveInRoom: `conversation:${conversationId}` },
+          );
+        } catch (pushError) {
+          console.error('[Push] DM upload push failed:', pushError);
+        }
+      })();
 
       res.status(201).json({
         success: true,

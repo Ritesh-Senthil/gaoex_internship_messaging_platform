@@ -3,6 +3,8 @@
  * Premium dark theme — black, striking blue, gold
  */
 
+import type { TextStyle } from 'react-native';
+
 export const colors = {
   // Primary brand colors
   primary: '#0A84FF',        // iOS system blue — vibrant, accessible
@@ -116,6 +118,99 @@ export const typography = {
   },
 } as const;
 
+/**
+ * Composed text-style tokens (the typographic scale).
+ *
+ * Each token is a `TextStyle`-compatible object built FROM the `typography`
+ * primitives above (fontSize / fontWeight / lineHeight) — never hardcoded magic
+ * numbers. `lineHeight` is resolved to absolute pixels (RN expects px, while the
+ * `typography.lineHeight` primitives are unitless multipliers).
+ *
+ * Use these instead of hand-assembling fontSize + fontWeight + lineHeight in
+ * screens, e.g. `style={textStyles.body}`.
+ */
+const composeTextStyle = (
+  fontSize: number,
+  fontWeight: TextStyle['fontWeight'],
+  lineHeightMultiplier: number,
+  letterSpacing?: number,
+): TextStyle => ({
+  fontSize,
+  fontWeight,
+  lineHeight: Math.round(fontSize * lineHeightMultiplier),
+  ...(letterSpacing !== undefined ? { letterSpacing } : null),
+});
+
+export const textStyles = {
+  // Hero / screen-level titles
+  largeTitle: composeTextStyle(
+    typography.fontSize.display, // 32
+    typography.fontWeight.bold,
+    typography.lineHeight.tight,
+    0.37,
+  ),
+  title: composeTextStyle(
+    typography.fontSize.xxxl, // 24
+    typography.fontWeight.bold,
+    typography.lineHeight.tight,
+    0.35,
+  ),
+
+  // Section headers
+  heading: composeTextStyle(
+    typography.fontSize.xxl, // 20
+    typography.fontWeight.semibold,
+    typography.lineHeight.tight,
+  ),
+  subheading: composeTextStyle(
+    typography.fontSize.xl, // 18
+    typography.fontWeight.semibold,
+    typography.lineHeight.tight,
+  ),
+
+  // Body copy
+  body: composeTextStyle(
+    typography.fontSize.lg, // 16
+    typography.fontWeight.regular,
+    typography.lineHeight.normal,
+  ),
+  bodyStrong: composeTextStyle(
+    typography.fontSize.lg, // 16
+    typography.fontWeight.semibold,
+    typography.lineHeight.normal,
+  ),
+
+  // Secondary / supporting copy
+  callout: composeTextStyle(
+    typography.fontSize.md, // 14
+    typography.fontWeight.regular,
+    typography.lineHeight.normal,
+  ),
+  subhead: composeTextStyle(
+    typography.fontSize.md, // 14
+    typography.fontWeight.medium,
+    typography.lineHeight.normal,
+  ),
+  footnote: composeTextStyle(
+    typography.fontSize.sm, // 12
+    typography.fontWeight.regular,
+    typography.lineHeight.normal,
+  ),
+  caption: composeTextStyle(
+    typography.fontSize.xs, // 10
+    typography.fontWeight.regular,
+    typography.lineHeight.tight,
+  ),
+
+  // Uppercase eyebrow / form labels
+  label: composeTextStyle(
+    typography.fontSize.sm, // 12
+    typography.fontWeight.semibold,
+    typography.lineHeight.tight,
+    0.5,
+  ),
+} satisfies Record<string, TextStyle>;
+
 // Role color picker palette (shared by CreateRole + RoleDetail)
 export const ROLE_COLORS = [
   '#E74C3C', '#E91E63', '#9B59B6', '#8E44AD',
@@ -153,8 +248,11 @@ export const theme = {
   spacing,
   borderRadius,
   typography,
+  textStyles,
   shadows,
 } as const;
 
 export type Theme = typeof theme;
 export type Colors = typeof colors;
+export type TextStyles = typeof textStyles;
+export type TextStyleToken = keyof typeof textStyles;

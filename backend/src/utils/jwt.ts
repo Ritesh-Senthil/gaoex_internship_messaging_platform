@@ -14,7 +14,11 @@ export interface TokenPayload {
 export function generateAccessToken(userId: string): string {
   const payload: TokenPayload = { userId, type: 'access' };
   const secret: Secret = config.jwt.accessSecret;
-  const options: SignOptions = { expiresIn: '15m' }; // 15 minutes
+  // Use the configured expiry so the signed token and the `expiresIn` we report
+  // to clients stay in sync (INF-01).
+  const options: SignOptions = {
+    expiresIn: config.jwt.accessExpiresIn as SignOptions['expiresIn'],
+  };
   return jwt.sign(payload, secret, options);
 }
 

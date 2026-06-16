@@ -50,6 +50,7 @@ import ChannelManagementScreen from '../screens/ChannelManagementScreen';
 import ChannelPermissionsScreen from '../screens/ChannelPermissionsScreen';
 import SearchScreen from '../screens/SearchScreen';
 import PinnedMessagesScreen from '../screens/PinnedMessagesScreen';
+import ForwardDestinationScreen from '../screens/ForwardDestinationScreen';
 
 // Create navigators
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -401,6 +402,18 @@ export default function AppNavigator() {
                 headerStyle: { backgroundColor: colors.backgroundSecondary },
                 headerTintColor: colors.text,
                 title: 'New Message',
+                presentation: 'modal',
+              }}
+            />
+            <Stack.Screen
+              name="ForwardDestination"
+              component={ForwardDestinationScreen}
+              options={{
+                headerShown: true,
+                headerStyle: { backgroundColor: colors.backgroundSecondary },
+                headerTintColor: colors.text,
+                headerTitleStyle: { fontWeight: '600' },
+                title: 'Forward to...',
                 presentation: 'modal',
               }}
             />

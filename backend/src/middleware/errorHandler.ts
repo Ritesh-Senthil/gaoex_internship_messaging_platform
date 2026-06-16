@@ -92,10 +92,21 @@ export const errorHandler = (
         statusCode = 404;
         message = 'Record not found';
         break;
+      case 'P1001':
+      case 'P1002':
+        statusCode = 503;
+        message = 'Database error';
+        break;
       default:
         statusCode = 400;
         message = 'Database error';
     }
+  }
+
+  // Connection errors from Prisma when the DB is unreachable (e.g. paused Supabase)
+  if (err.name === 'PrismaClientInitializationError') {
+    statusCode = 503;
+    message = 'Database error';
   }
 
   // Handle validation errors

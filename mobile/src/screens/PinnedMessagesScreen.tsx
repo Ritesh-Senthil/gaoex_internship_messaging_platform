@@ -20,7 +20,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, spacing, typography, borderRadius } from '../constants/theme';
 import { RootStackParamList, Message, DMMessage } from '../types';
-import { channelApi, conversationApi } from '../services/api';
+import { channelApi, conversationApi, programApi, roleApi } from '../services/api';
 import { useAuthStore } from '../store/authStore';
 import {
   subscribeToChannelEvents,
@@ -57,6 +57,12 @@ export default function PinnedMessagesScreen() {
   const [messages, setMessages] = useState<PinnedMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Program members/roles to resolve stable `<@id>` / `<@&id>` mention tokens
+  // (PE-04) into `@DisplayName` highlights, sourced the same way ChannelScreen
+  // does. Only channel pins (with a known program) carry tokens; DM pins don't.
+  const [mentionUsers, setMentionUsers] = useState<{ id: string; displayName: string }[]>([]);
+  const [mentionRoles, setMentionRoles] = useState<{ id: string; name: string }[]>([]);
 
   const isChannel = !!channelId;
 
@@ -111,6 +117,29 @@ export default function PinnedMessagesScreen() {
   useEffect(() => {
     fetchPinned();
   }, [fetchPinned]);
+
+  // Fetch members + roles to resolve mention tokens (PE-04b) for channel pins.
+  useEffect(() => {
+    if (!isChannel || !programId) return;
+    let isMounted = true;
+    (async () => {
+      try {
+        const membersResponse = await programApi.getMembers(programId);
+        if (isMounted && membersResponse.success) {
+          setMentionUsers(membersResponse.data.members.map((m: any) => ({
+            id: m.userId, displayName: m.displayName,
+          })));
+        }
+        const rolesResponse = await roleApi.getRoles(programId);
+        if (isMounted && rolesResponse.success) {
+          setMentionRoles(rolesResponse.data.roles
+            .filter((r: any) => r.name !== '@everyone')
+            .map((r: any) => ({ id: r.id, name: r.name })));
+        }
+      } catch {}
+    })();
+    return () => { isMounted = false; };
+  }, [isChannel, programId]);
 
   // Real-time updates: listen for pin/unpin events
   useEffect(() => {
@@ -263,7 +292,11 @@ export default function PinnedMessagesScreen() {
         activeOpacity={0.7}
       >
         {item.content ? (
-          <MarkdownText style={styles.messageText}>
+          <MarkdownText
+            style={styles.messageText}
+            mentionUsers={mentionUsers}
+            mentionRoles={mentionRoles}
+          >
             {item.content}
           </MarkdownText>
         ) : null}

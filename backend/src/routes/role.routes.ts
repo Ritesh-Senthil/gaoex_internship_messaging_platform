@@ -7,9 +7,11 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
 import { prisma } from '../config/database';
 import { authenticate } from '../middleware/auth';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../middleware/errorHandler';
+import { validateBody } from '../middleware/validate';
 import { 
   Permissions, 
   hasPermission, 
@@ -21,6 +23,29 @@ import {
 } from '../utils/permissions';
 
 const router = Router();
+
+// ── Validation schemas (SEC-07) ──
+const createRoleSchema = z.object({
+  name: z.string().trim().min(1, 'Role name is required'),
+  color: z.string().optional(),
+  tier: z.number().int().optional(),
+  permissions: z.array(z.string()).optional(),
+  isHoisted: z.boolean().optional(),
+  isMentionable: z.boolean().optional(),
+});
+
+const updateRoleSchema = z.object({
+  name: z.string().trim().min(1, 'Role name cannot be empty').optional(),
+  color: z.string().optional(),
+  tier: z.number().int().optional(),
+  permissions: z.array(z.string()).optional(),
+  isHoisted: z.boolean().optional(),
+  isMentionable: z.boolean().optional(),
+});
+
+const assignRoleSchema = z.object({
+  roleId: z.string().min(1, 'roleId is required'),
+});
 
 // ============================================
 // TIER DEFINITIONS
@@ -265,7 +290,7 @@ router.get('/:programId/roles/:roleId', authenticate, async (req: Request, res: 
 // CREATE ROLE
 // ============================================
 
-router.post('/:programId/roles', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:programId/roles', authenticate, validateBody(createRoleSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { programId } = req.params;
     const userId = req.user!.id;
@@ -369,7 +394,7 @@ router.post('/:programId/roles', authenticate, async (req: Request, res: Respons
 // UPDATE ROLE
 // ============================================
 
-router.patch('/:programId/roles/:roleId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.patch('/:programId/roles/:roleId', authenticate, validateBody(updateRoleSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { programId, roleId } = req.params;
     const userId = req.user!.id;
@@ -556,7 +581,7 @@ router.delete('/:programId/roles/:roleId', authenticate, async (req: Request, re
 // ASSIGN ROLE TO MEMBER
 // ============================================
 
-router.post('/:programId/members/:memberId/roles', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:programId/members/:memberId/roles', authenticate, validateBody(assignRoleSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { programId, memberId } = req.params;
     const userId = req.user!.id;

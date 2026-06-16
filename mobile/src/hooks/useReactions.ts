@@ -10,6 +10,7 @@
 
 import { useCallback, useMemo } from 'react';
 import { Alert } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { reactionApi } from '../services/api';
 
 // Minimal shape that every message type satisfies (Message, DMMessage, ThreadMessage)
@@ -139,7 +140,7 @@ export function useReactions(userId: string | undefined, userDisplayName: string
   );
 
   /**
-   * Add a reaction via API and update message list.
+   * Add a reaction: paint it immediately (UX-02), then persist. Roll back on error.
    */
   const handleAddReaction = useCallback(
     async <T extends ReactionableMessage>(
@@ -148,10 +149,13 @@ export function useReactions(userId: string | undefined, userDisplayName: string
       setMessages: SetMessages<T>,
     ) => {
       if (!currentUser) return;
+      Haptics.selectionAsync();
+      setMessages(prev => addReactionToMessages(prev, messageId, emoji, currentUser));
       try {
         await reactionApi.addReaction(messageId, emoji);
-        setMessages(prev => addReactionToMessages(prev, messageId, emoji, currentUser));
       } catch (err: any) {
+        // Roll back the optimistic add (inverse op for this user).
+        setMessages(prev => removeReactionFromMessages(prev, messageId, emoji, currentUser.id));
         Alert.alert('Error', err.message || 'Failed to add reaction');
       }
     },
@@ -159,7 +163,7 @@ export function useReactions(userId: string | undefined, userDisplayName: string
   );
 
   /**
-   * Toggle a reaction via API and update message list.
+   * Toggle a reaction: paint it immediately (UX-02), then persist. Roll back on error.
    */
   const handleToggleReaction = useCallback(
     async <T extends ReactionableMessage>(
@@ -169,16 +173,25 @@ export function useReactions(userId: string | undefined, userDisplayName: string
       setMessages: SetMessages<T>,
     ) => {
       if (!currentUser) return;
-      try {
-        if (hasReacted) {
+      Haptics.selectionAsync();
+      if (hasReacted) {
+        setMessages(prev => removeReactionFromMessages(prev, messageId, emoji, currentUser.id));
+        try {
           await reactionApi.removeReaction(messageId, emoji);
-          setMessages(prev => removeReactionFromMessages(prev, messageId, emoji, currentUser.id));
-        } else {
-          await reactionApi.addReaction(messageId, emoji);
+        } catch (err) {
+          // Roll back: re-add what we optimistically removed.
           setMessages(prev => addReactionToMessages(prev, messageId, emoji, currentUser));
+          console.error('Failed to remove reaction:', err);
         }
-      } catch (err: any) {
-        console.error('Failed to toggle reaction:', err);
+      } else {
+        setMessages(prev => addReactionToMessages(prev, messageId, emoji, currentUser));
+        try {
+          await reactionApi.addReaction(messageId, emoji);
+        } catch (err) {
+          // Roll back: remove what we optimistically added.
+          setMessages(prev => removeReactionFromMessages(prev, messageId, emoji, currentUser.id));
+          console.error('Failed to toggle reaction:', err);
+        }
       }
     },
     [currentUser],

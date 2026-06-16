@@ -4,14 +4,79 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database';
 import { authenticate } from '../middleware/auth';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../middleware/errorHandler';
 import { sendPushToUsers, buildDMNotification } from '../services/pushNotification';
+import { buildDirectMessageKey } from '../utils/directMessage';
+import { messageRateLimiter } from '../middleware/rateLimit';
+import { validateBody } from '../middleware/validate';
 
 const router = Router();
 
 const MAX_GROUP_PARTICIPANTS = 8;
+
+const conversationParticipantsInclude = {
+  participants: {
+    include: {
+      user: {
+        select: {
+          id: true,
+          displayName: true,
+          avatarUrl: true,
+          isOnline: true,
+          lastSeenAt: true,
+        },
+      },
+    },
+  },
+} as const;
+
+function formatOneToOneConversation(
+  conversation: {
+    id: string;
+    participants: {
+      userId: string;
+      user: {
+        id: string;
+        displayName: string;
+        avatarUrl: string | null;
+        isOnline: boolean;
+      };
+    }[];
+  },
+  userId: string,
+) {
+  const otherParticipant = conversation.participants.find(p => p.userId !== userId);
+
+  return {
+    id: conversation.id,
+    isGroup: false as const,
+    name: otherParticipant?.user.displayName || 'Unknown',
+    avatarUrl: otherParticipant?.user.avatarUrl || null,
+    isOnline: otherParticipant?.user.isOnline || false,
+    participants: conversation.participants.map(p => ({
+      userId: p.user.id,
+      displayName: p.user.displayName,
+      avatarUrl: p.user.avatarUrl,
+      isOnline: p.user.isOnline,
+    })),
+  };
+}
+
+// ── Validation schemas (SEC-07) ──
+const sendDmMessageSchema = z.object({
+  content: z
+    .string()
+    .trim()
+    .min(1, 'Message content is required')
+    .max(4000, 'Message content cannot exceed 4000 characters'),
+  parentMessageId: z.string().uuid('Invalid parent message id').nullish(),
+  // Client nonce for optimistic-send reconciliation (UX-01); echoed, not persisted.
+  clientId: z.string().max(64).optional(),
+});
 
 /**
  * Build a display name for a group conversation.
@@ -77,31 +142,27 @@ router.get('/', authenticate, async (req: Request, res: Response, next: NextFunc
       orderBy: { updatedAt: 'desc' },
     });
 
-    // Get conversation IDs for batch unread count query
+    // Build unread count map in a SINGLE grouped query (PE-03).
+    // Previously this fired one `message.count` per conversation (N+1). The
+    // per-conversation threshold is each participant's own `lastReadAt`, so we
+    // join the participant row and count messages newer than it in one pass.
     const conversationIds = conversations.map(c => c.id);
-
-    // Get actual unread counts for all conversations at once
-    const myParticipants = conversations.map(conv => 
-      conv.participants.find(p => p.userId === userId)
-    );
-
-    // Build unread count map
-    const unreadCountsPromises = conversations.map(async (conv) => {
-      const myParticipant = conv.participants.find(p => p.userId === userId);
-      if (!myParticipant) return { id: conv.id, count: 0 };
-
-      const count = await prisma.message.count({
-        where: {
-          conversationId: conv.id,
-          createdAt: { gt: myParticipant.lastReadAt },
-          authorId: { not: userId }, // Don't count own messages
-        },
-      });
-      return { id: conv.id, count };
-    });
-
-    const unreadCounts = await Promise.all(unreadCountsPromises);
-    const unreadCountMap = new Map(unreadCounts.map(uc => [uc.id, uc.count]));
+    const unreadCountMap = new Map<string, number>();
+    if (conversationIds.length > 0) {
+      const unreadRows = await prisma.$queryRaw<{ conversationId: string; count: number }[]>`
+        SELECT m."conversationId" AS "conversationId", COUNT(*)::int AS "count"
+        FROM "Message" m
+        JOIN "ConversationParticipant" cp
+          ON cp."conversationId" = m."conversationId" AND cp."userId" = ${userId}
+        WHERE m."conversationId" IN (${Prisma.join(conversationIds)})
+          AND m."authorId" <> ${userId}
+          AND m."createdAt" > cp."lastReadAt"
+        GROUP BY m."conversationId"
+      `;
+      for (const row of unreadRows) {
+        unreadCountMap.set(row.conversationId, Number(row.count));
+      }
+    }
 
     // Format conversations with other participant info and last message
     const formattedConversations = conversations.map(conv => {
@@ -207,57 +268,54 @@ router.post('/', authenticate, async (req: Request, res: Response, next: NextFun
     }
 
     if (!isGroup) {
-      const otherUserId = uniqueParticipantIds.find(id => id !== userId);
+      const otherUserId = uniqueParticipantIds.find(id => id !== userId)!;
+      const dmKey = buildDirectMessageKey(userId, otherUserId);
 
-      // Check for existing 1:1 conversation
-      const existingConversation = await prisma.conversation.findFirst({
-        where: {
-          isGroup: false,
-          AND: [
-            { participants: { some: { userId } } },
-            { participants: { some: { userId: otherUserId } } },
-          ],
-        },
-        include: {
-          participants: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  displayName: true,
-                  avatarUrl: true,
-                  isOnline: true,
-                  lastSeenAt: true,
-                },
-              },
-            },
+      const findExistingOneToOne = async () => {
+        const byKey = await prisma.conversation.findUnique({
+          where: { directMessageKey: dmKey },
+          include: conversationParticipantsInclude,
+        });
+        if (byKey) return byKey;
+
+        // Legacy rows created before directMessageKey existed.
+        return prisma.conversation.findFirst({
+          where: {
+            isGroup: false,
+            directMessageKey: null,
+            AND: [
+              { participants: { some: { userId } } },
+              { participants: { some: { userId: otherUserId } } },
+            ],
           },
-        },
-      });
+          include: conversationParticipantsInclude,
+        });
+      };
 
-      if (existingConversation) {
-        // Return existing conversation
-        const otherParticipant = existingConversation.participants.find(p => p.userId !== userId);
+      const returnExistingOneToOne = async (
+        existingConversation: NonNullable<Awaited<ReturnType<typeof findExistingOneToOne>>>,
+      ) => {
+        if (!existingConversation.directMessageKey) {
+          await prisma.conversation.update({
+            where: { id: existingConversation.id },
+            data: { directMessageKey: dmKey },
+          }).catch(() => {
+            // Another request may have backfilled first — safe to ignore.
+          });
+        }
 
         return res.json({
           success: true,
           data: {
-            conversation: {
-              id: existingConversation.id,
-              isGroup: false,
-              name: otherParticipant?.user.displayName || 'Unknown',
-              avatarUrl: otherParticipant?.user.avatarUrl || null,
-              isOnline: otherParticipant?.user.isOnline || false,
-              participants: existingConversation.participants.map(p => ({
-                userId: p.user.id,
-                displayName: p.user.displayName,
-                avatarUrl: p.user.avatarUrl,
-                isOnline: p.user.isOnline,
-              })),
-            },
+            conversation: formatOneToOneConversation(existingConversation, userId),
             isExisting: true,
           },
         });
+      };
+
+      const existingConversation = await findExistingOneToOne();
+      if (existingConversation) {
+        return returnExistingOneToOne(existingConversation);
       }
     }
 
@@ -273,33 +331,47 @@ router.post('/', authenticate, async (req: Request, res: Response, next: NextFun
 
     // Create the conversation
     const groupName = isGroup && name?.trim() ? name.trim() : null;
-    const conversation = await prisma.conversation.create({
-      data: {
-        isGroup,
-        name: groupName,
-        createdById: isGroup ? userId : null,
-        participants: {
-          create: uniqueParticipantIds.map(pId => ({
-            userId: pId,
-          })),
-        },
-      },
-      include: {
-        participants: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                displayName: true,
-                avatarUrl: true,
-                isOnline: true,
-                lastSeenAt: true,
-              },
-            },
+
+    let conversation;
+    try {
+      conversation = await prisma.conversation.create({
+        data: {
+          isGroup,
+          name: groupName,
+          createdById: isGroup ? userId : null,
+          directMessageKey: isGroup ? null : buildDirectMessageKey(userId, uniqueParticipantIds.find(id => id !== userId)!),
+          participants: {
+            create: uniqueParticipantIds.map(pId => ({
+              userId: pId,
+            })),
           },
         },
-      },
-    });
+        include: conversationParticipantsInclude,
+      });
+    } catch (error) {
+      // Race: two clients created the same 1:1 at once — return the winner.
+      if (
+        !isGroup &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const dmKey = buildDirectMessageKey(userId, uniqueParticipantIds.find(id => id !== userId)!);
+        const raced = await prisma.conversation.findUnique({
+          where: { directMessageKey: dmKey },
+          include: conversationParticipantsInclude,
+        });
+        if (raced) {
+          return res.json({
+            success: true,
+            data: {
+              conversation: formatOneToOneConversation(raced, userId),
+              isExisting: true,
+            },
+          });
+        }
+      }
+      throw error;
+    }
 
     const otherParticipants = conversation.participants.filter(p => p.userId !== userId);
     const displayInfo = isGroup
@@ -585,11 +657,11 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
  * POST /api/conversations/:id/messages
  * Send a message in a conversation
  */
-router.post('/:id/messages', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/messages', authenticate, messageRateLimiter, validateBody(sendDmMessageSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-    const { content, parentMessageId } = req.body;
+    const { content, parentMessageId, clientId } = req.body;
 
     if (!content || typeof content !== 'string' || content.trim().length === 0) {
       throw new BadRequestError('Message content is required');
@@ -621,46 +693,39 @@ router.post('/:id/messages', authenticate, async (req: Request, res: Response, n
       }
     }
 
-    // Create the message
-    const message = await prisma.message.create({
-      data: {
-        conversationId: id,
-        authorId: userId,
-        content: content.trim(),
-        parentMessageId: parentMessageId || null,
-      },
-      include: {
-        author: {
-          select: {
-            id: true,
-            displayName: true,
-            avatarUrl: true,
-          },
-        },
-      },
-    });
-
-    // Update parent message thread metadata
-    if (parentMessageId) {
-      await prisma.message.update({
-        where: { id: parentMessageId },
+    // Persist the message and its side effects atomically (DAT-01): message
+    // insert, parent thread counter, conversation bump, and sender read cursor.
+    const message = await prisma.$transaction(async (tx) => {
+      const created = await tx.message.create({
         data: {
-          replyCount: { increment: 1 },
-          lastReplyAt: new Date(),
+          conversationId: id,
+          authorId: userId,
+          content: content.trim(),
+          parentMessageId: parentMessageId || null,
+        },
+        include: {
+          author: { select: { id: true, displayName: true, avatarUrl: true } },
         },
       });
-    }
 
-    // Update conversation's updatedAt
-    await prisma.conversation.update({
-      where: { id },
-      data: { updatedAt: new Date() },
-    });
+      if (parentMessageId) {
+        await tx.message.update({
+          where: { id: parentMessageId },
+          data: { replyCount: { increment: 1 }, lastReplyAt: new Date() },
+        });
+      }
 
-    // Update sender's last read
-    await prisma.conversationParticipant.update({
-      where: { id: participant.id },
-      data: { lastReadAt: new Date() },
+      await tx.conversation.update({
+        where: { id },
+        data: { updatedAt: new Date() },
+      });
+
+      await tx.conversationParticipant.update({
+        where: { id: participant.id },
+        data: { lastReadAt: new Date() },
+      });
+
+      return created;
     });
 
     // Format the message response
@@ -676,6 +741,7 @@ router.post('/:id/messages', authenticate, async (req: Request, res: Response, n
       attachments: [],
       createdAt: message.createdAt,
       updatedAt: message.updatedAt,
+      clientId, // echoed for optimistic-send reconciliation (UX-01)
     };
 
     // Emit real-time events
@@ -720,18 +786,17 @@ router.post('/:id/messages', authenticate, async (req: Request, res: Response, n
         select: { userId: true },
       });
       
-      // 3. Emit unread notification to each participant not in the conversation room
-      const conversationRoom = io.sockets.adapter.rooms.get(`conversation:${id}`);
-      const socketsInConversation = conversationRoom ? Array.from(conversationRoom) : [];
-      
+      // 3. Emit unread notification to each participant, excluding sockets
+      //    already in the conversation room server-side (RT-02).
       for (const otherParticipant of otherParticipants) {
         // Emit to the user's personal room (they join this on authenticate)
-        io.to(`user:${otherParticipant.userId}`).emit('unread:dm', {
-          conversationId: id,
-          recipientUserId: otherParticipant.userId,
-          senderId: userId,
-          excludeSocketIds: socketsInConversation,
-        });
+        io.to(`user:${otherParticipant.userId}`)
+          .except(`conversation:${id}`)
+          .emit('unread:dm', {
+            conversationId: id,
+            recipientUserId: otherParticipant.userId,
+            senderId: userId,
+          });
       }
     }
 
@@ -756,7 +821,7 @@ router.post('/:id/messages', authenticate, async (req: Request, res: Response, n
           authorName,
           messagePreview: content.trim(),
           conversationId: id,
-        }));
+        }), { excludeActiveInRoom: `conversation:${id}` });
       } catch (pushError) {
         console.error('[Push] DM message push failed:', pushError);
       }

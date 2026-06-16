@@ -162,6 +162,9 @@ export interface MessageReaction {
   hasReacted?: boolean;
 }
 
+/** Optimistic-send state for a locally-created message (UX-01). */
+export type MessageSendStatus = 'sending' | 'failed';
+
 export interface Message {
   id: string;
   content: string;
@@ -187,6 +190,10 @@ export interface Message {
   latestReplyAuthors?: { id: string; displayName: string; avatarUrl: string | null }[];
   createdAt: string;
   updatedAt: string;
+  // Optimistic send (UX-01): present only on locally-created messages until the
+  // server echo reconciles them. `clientId` is the reconciliation nonce.
+  clientId?: string;
+  sendStatus?: MessageSendStatus;
 }
 
 export interface Attachment {
@@ -249,6 +256,32 @@ export interface DMMessage {
   latestReplyAuthors?: { id: string; displayName: string; avatarUrl: string | null }[];
   createdAt: string;
   updatedAt: string;
+  // Optimistic send (UX-01); see Message.clientId / sendStatus.
+  clientId?: string;
+  sendStatus?: MessageSendStatus;
+}
+
+/**
+ * Normalized thread-reply shape used by `ThreadScreen` and the central message
+ * cache (ST-01). Unifies channel (`Message`) and DM (`DMMessage`) replies into a
+ * single shape so thread slices live in the same store keyed by
+ * `thread:<parentMessageId>`.
+ */
+export interface ThreadMessage {
+  id: string;
+  content: string;
+  authorId: string;
+  authorName: string;
+  authorAvatar: string | null;
+  isEdited: boolean;
+  attachments: any[];
+  reactions: any[];
+  parentMessageId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  // Optimistic send (UX-01); see Message.clientId / sendStatus.
+  clientId?: string;
+  sendStatus?: MessageSendStatus;
 }
 
 // ============================================
@@ -355,6 +388,45 @@ export interface ChannelSearchResult {
 }
 
 // ============================================
+// FORWARD TYPES
+// ============================================
+
+export interface ForwardDestinationChannel {
+  id: string;
+  name: string;
+  type: 'TEXT' | 'ANNOUNCEMENT';
+  programId: string;
+  programName: string;
+  categoryName: string | null;
+  isPrivate: boolean;
+}
+
+export interface ForwardDestinationProgram {
+  id: string;
+  name: string;
+  channels: ForwardDestinationChannel[];
+}
+
+export interface ForwardDestinationConversation {
+  id: string;
+  name: string;
+  isGroup: boolean;
+  avatarUrl: string | null;
+}
+
+export interface ForwardDestinations {
+  programs: ForwardDestinationProgram[];
+  conversations: ForwardDestinationConversation[];
+}
+
+export interface ForwardResult {
+  message: Message | DMMessage;
+  destination:
+    | { type: 'channel'; channelId: string; channelName: string; programId: string }
+    | { type: 'conversation'; conversationId: string; conversationName: string; isGroup: boolean };
+}
+
+// ============================================
 // NAVIGATION TYPES
 // ============================================
 
@@ -375,13 +447,21 @@ export type RootStackParamList = {
   Conversation: { conversationId: string; name: string; highlightMessageId?: string };
   NewConversation: undefined;
   GroupInfo: { conversationId: string; groupName: string };
-  Thread: { messageId: string; channelId?: string; conversationId?: string; channelName?: string; conversationName?: string };
+  Thread: { messageId: string; channelId?: string; conversationId?: string; channelName?: string; conversationName?: string; programId?: string };
   JoinProgram: undefined;
   CreateProgram: undefined;
   ProgramSettings: { programId: string; programName: string };
   ChannelManagement: { programId: string; programName: string };
   ChannelPermissions: { programId: string; channelId: string; channelName: string };
   PinnedMessages: { channelId?: string; conversationId?: string; title: string; programId?: string };
+  ForwardDestination: {
+    messageId: string;
+    sourceChannelId?: string;
+    sourceConversationId?: string;
+    previewText: string;
+    previewAuthor: string;
+    hasAttachments?: boolean;
+  };
 };
 
 export type MainTabParamList = {

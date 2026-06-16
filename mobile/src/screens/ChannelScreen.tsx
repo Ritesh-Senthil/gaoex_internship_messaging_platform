@@ -22,15 +22,21 @@ import {
   Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRoute, RouteProp, useNavigation } from '@react-navigation/native';
+import { useRoute, RouteProp, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useHeaderHeight } from '@react-navigation/elements';
 import { Ionicons } from '@expo/vector-icons';
 
 import { colors, spacing, typography, borderRadius } from '../constants/theme';
-import { RootStackParamList, Message } from '../types';
+import { CHAT_LIST_PERF_PROPS } from '../constants/listPerf';
+import { RootStackParamList, Message, Attachment } from '../types';
 import { channelApi, programApi, roleApi, uploadApi } from '../services/api';
 import { useAuthStore } from '../store/authStore';
 import { useUnreadStore } from '../store/unreadStore';
+import { useConnectionStore } from '../store/connectionStore';
+import { useMessageStore, useCachedMessages, hasCachedMessages, reconcileCatchUp, mergeMessagesById, upsertMessage, newClientId } from '../store/messageStore';
+import { useActiveChatStore } from '../store/activeChatStore';
+import { openForwardPicker } from '../utils/forwardMessage';
 import {
   joinChannel,
   leaveChannel,
@@ -38,11 +44,14 @@ import {
   leaveProgram,
   subscribeToChannelEvents,
   subscribeToChannelCategoryEvents,
+  sendTypingStart,
+  sendTypingStop,
   ChannelEventData,
   ChannelDeletedEventData,
   ThreadReplyAddedData,
   MessagePinnedData,
   MessageUnpinnedData,
+  ChannelTypingEventData,
 } from '../services/socket';
 
 // Shared hooks
@@ -62,13 +71,16 @@ import MarkdownText from '../components/MarkdownText';
 import ReactionBar from '../components/ReactionBar';
 import MessageInput from '../components/MessageInput';
 import { MentionUser, MentionRole } from '../components/MentionAutocomplete';
-import AttachmentPicker from '../components/AttachmentPicker';
+import { toMentionTokens } from '../utils/mentions';
+import AttachmentPicker, { SelectedFile } from '../components/AttachmentPicker';
 import AttachmentPreview from '../components/AttachmentPreview';
 import { AttachmentList } from '../components/FileCard';
 import UserAvatar from '../components/UserAvatar';
 import SwipeableMessage from '../components/SwipeableMessage';
 import ConnectionBanner from '../components/ConnectionBanner';
 import ScrollToBottomFAB from '../components/ScrollToBottomFAB';
+import TypingIndicator, { TypingUser } from '../components/TypingIndicator';
+import * as Haptics from 'expo-haptics';
 import { formatMessageTime, formatDateHeader, shouldShowDateHeader } from '../utils/dateFormatters';
 
 type RouteProps = RouteProp<RootStackParamList, 'Channel'>;
@@ -77,16 +89,24 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 export default function ChannelScreen() {
   const route = useRoute<RouteProps>();
   const navigation = useNavigation<NavigationProp>();
+  const headerHeight = useHeaderHeight();
   const { channelId, channelName, programId, highlightMessageId } = route.params;
   const { user } = useAuthStore();
   const { markChannelRead } = useUnreadStore();
 
-  // --- Message state ---
+  // --- Message state (backed by the central cache — ST-01) ---
+  const cacheKey = `channel:${channelId}`;
   const [currentChannelName, setCurrentChannelName] = useState(channelName);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const messages = useCachedMessages<Message>(cacheKey);
+  // setState-compatible dispatcher so existing handlers/hooks work unchanged.
+  const setMessages = useCallback(
+    (value: Message[] | ((prev: Message[]) => Message[])) =>
+      useMessageStore.getState().setMessages<Message>(cacheKey, value),
+    [cacheKey],
+  );
+  // Skip the full-screen spinner when we already have cached messages to show.
+  const [isLoading, setIsLoading] = useState(() => !hasCachedMessages(cacheKey));
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [isSending, setIsSending] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { messageText, setMessageText, clearDraft } = useDraft(`channel:${channelId}`);
@@ -105,8 +125,24 @@ export default function ChannelScreen() {
 
   const flatListRef = useRef<FlatList>(null);
   const isNearBottom = useRef(true);
+  // While a programmatic scroll-to-bottom is settling, ignore transient onScroll
+  // readings. Variable-height rows finish measuring after the scroll fires, and
+  // those reflow events would otherwise flip us out of "stick to bottom" and park
+  // the list just above the end (the chat opens/sends short of the newest message).
+  const programmaticScrollUntil = useRef(0);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const [showScrollFAB, setShowScrollFAB] = useState(false);
+
+  // Typing indicator (UX-06) — mirrors the DM implementation in ConversationScreen.
+  const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
+  const typingTimeouts = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const isTypingRef = useRef(false);
+  const typingEmitTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scrollToBottom = useCallback((animated: boolean) => {
+    programmaticScrollUntil.current = Date.now() + 350;
+    flatListRef.current?.scrollToEnd({ animated });
+  }, []);
 
   // --- Shared hooks ---
   const { isMuted, isMuteLoading, handleToggleMute } = useMute('channel', channelId);
@@ -119,8 +155,13 @@ export default function ChannelScreen() {
   const {
     selectedFiles, showPicker, uploadProgress, isUploading,
     openPicker, closePicker, addFiles, removeFile, clearFiles,
-    setUploadProgress, setIsUploading, resetUpload,
   } = useAttachments();
+  // Per-upload progress (UX-01): keyed by the optimistic message's clientId, so a
+  // file send renders an immediate placeholder and reconciles in the background
+  // like text sends. `pendingUploadsRef` keeps the picked files for an in-flight
+  // upload so a failed row can be retried with the same files + clientId.
+  const [uploadProgressMap, setUploadProgressMap] = useState<Record<string, number>>({});
+  const pendingUploadsRef = useRef<Map<string, SelectedFile[]>>(new Map());
   const { highlightedId, highlightAnim, hasScrolledToHighlight } = useMessageHighlight({
     messages,
     flatListRef: flatListRef as React.RefObject<FlatList>,
@@ -179,17 +220,72 @@ export default function ChannelScreen() {
         if (loadMore) {
           setMessages(prev => [...response.data.messages, ...prev]);
         } else {
-          setMessages(response.data.messages);
+          const prev = (useMessageStore.getState().slices[cacheKey] as Message[] | undefined) ?? [];
+          setMessages(mergeMessagesById(prev, response.data.messages));
         }
         setHasMore(response.data.hasMore);
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load messages');
+      if (!loadMore) {
+        useMessageStore.getState().clearKey(cacheKey);
+      }
     } finally {
       setIsLoading(false);
       setIsLoadingMore(false);
     }
-  }, [channelId, hasMore, isLoadingMore, messages]);
+  }, [channelId, hasMore, isLoadingMore, messages, cacheKey]);
+
+  // Mark this channel as actively viewed (Search / push / list all route here).
+  useFocusEffect(
+    useCallback(() => {
+      useActiveChatStore.getState().setActiveChannel(channelId);
+      return () => useActiveChatStore.getState().setActiveChannel(null);
+    }, [channelId]),
+  );
+
+  // --- Catch-up: refetch the latest page and merge into the cache (RT-01).
+  // Runs in the background (no spinner) when the screen regains focus or the
+  // socket reconnects, so messages missed during a disconnect/while-away appear.
+  const catchUp = useCallback(async () => {
+    try {
+      const response = await channelApi.getMessages(channelId, { limit: 50 });
+      if (!response.success) return;
+      // Read the latest cached slice imperatively so reconciliation sees the
+      // freshest messages (not a stale closure) and can compute the gap once.
+      const prev = (useMessageStore.getState().slices[cacheKey] as Message[] | undefined) ?? [];
+      const { messages: reconciled, gap } = reconcileCatchUp(prev, response.data.messages);
+      setMessages(reconciled);
+      // A gap means >1 page arrived while away; re-enable "load earlier" so the
+      // user can scroll up and backfill the missing range.
+      if (gap) setHasMore(true);
+    } catch {
+      // Best-effort; live socket events and the next focus will reconcile.
+    }
+  }, [channelId, cacheKey, setMessages]);
+
+  // Re-focus catch-up (skip the first focus — the initial load below covers it).
+  const skipFirstFocus = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (skipFirstFocus.current) { skipFirstFocus.current = false; return; }
+      catchUp();
+    }, [catchUp]),
+  );
+
+  // Reconnect catch-up: assume connected at mount so the initial connect doesn't
+  // double-fetch; only a genuine reconnect after a drop triggers a catch-up.
+  const wasConnected = useRef(true);
+  useEffect(() => {
+    const unsub = useConnectionStore.subscribe((state) => {
+      if (state.status === 'connected') {
+        if (!wasConnected.current) { wasConnected.current = true; catchUp(); }
+      } else {
+        wasConnected.current = false;
+      }
+    });
+    return unsub;
+  }, [catchUp]);
 
   // --- Initial data load ---
   useEffect(() => {
@@ -247,11 +343,9 @@ export default function ChannelScreen() {
       onNewMessage: (message: Message) => {
         if (message.channelId === channelId && message.author.id !== user?.id && !message.parentMessageId) {
           setMessages(prev => prev.some(m => m.id === message.id) ? prev : [...prev, message]);
-          if (isNearBottom.current) {
-            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-          } else {
-            setNewMessageCount(c => c + 1);
-          }
+          // onContentSizeChange snaps us to the new bottom while we're pinned there;
+          // otherwise surface the unread pill instead of yanking the user down.
+          if (!isNearBottom.current) setNewMessageCount(c => c + 1);
         }
       },
       onMessageUpdated: (message: Message) => {
@@ -298,9 +392,38 @@ export default function ChannelScreen() {
           ));
         }
       },
+      onUserTyping: (data: ChannelTypingEventData) => {
+        if (data.channelId !== channelId || data.userId === user?.id) return;
+        setTypingUsers(prev => prev.some(u => u.userId === data.userId) ? prev : [...prev, { userId: data.userId, displayName: data.displayName, avatarUrl: data.avatarUrl }]);
+        const existingTimeout = typingTimeouts.current.get(data.userId);
+        if (existingTimeout) clearTimeout(existingTimeout);
+        const timeout = setTimeout(() => {
+          setTypingUsers(prev => prev.filter(u => u.userId !== data.userId));
+          typingTimeouts.current.delete(data.userId);
+        }, 3000);
+        typingTimeouts.current.set(data.userId, timeout);
+      },
+      onUserStoppedTyping: (data: ChannelTypingEventData) => {
+        if (data.channelId !== channelId || data.userId === user?.id) return;
+        setTypingUsers(prev => prev.filter(u => u.userId !== data.userId));
+        const existingTimeout = typingTimeouts.current.get(data.userId);
+        if (existingTimeout) clearTimeout(existingTimeout);
+        typingTimeouts.current.delete(data.userId);
+      },
     });
 
-    return () => { leaveChannel(channelId); unsubscribe(); };
+    return () => {
+      leaveChannel(channelId);
+      unsubscribe();
+      typingTimeouts.current.forEach(t => clearTimeout(t));
+      typingTimeouts.current.clear();
+      setTypingUsers([]);
+      if (isTypingRef.current && user?.id) {
+        sendTypingStop(channelId, user.id);
+        isTypingRef.current = false;
+      }
+      if (typingEmitTimeout.current) { clearTimeout(typingEmitTimeout.current); typingEmitTimeout.current = null; }
+    };
   }, [channelId, user?.id, applyReactionAdded, applyReactionRemoved]);
 
   // Channel update / delete events
@@ -325,40 +448,171 @@ export default function ChannelScreen() {
   }, [channelId, programId, currentChannelName, navigation]);
 
   // --- Send message ---
+  // Fire the actual request for an optimistic message and reconcile the result.
+  // Used by both first-send and retry (same clientId so it dedupes on the server
+  // echo). Marks the row 'failed' on error so it can be retried.
+  const deliverChannelMessage = useCallback(async (content: string, clientId: string) => {
+    setMessages(prev => prev.map(m =>
+      m.clientId === clientId ? { ...m, sendStatus: 'sending' as const } : m,
+    ));
+    try {
+      const response = await channelApi.sendMessage(channelId, content, undefined, clientId);
+      if (!response.success) throw new Error('send failed');
+      setMessages(prev => upsertMessage(prev, { ...response.data.message, sendStatus: undefined }));
+    } catch {
+      setMessages(prev => prev.map(m =>
+        m.clientId === clientId ? { ...m, sendStatus: 'failed' as const } : m,
+      ));
+    }
+  }, [channelId, setMessages]);
+
+  // Upload variant of deliverChannelMessage (UX-01): runs the multipart upload for
+  // an optimistic file message and reconciles on success. The picked files live in
+  // pendingUploadsRef so a failed upload can be retried with the same clientId.
+  const deliverChannelUpload = useCallback(async (clientId: string) => {
+    const files = pendingUploadsRef.current.get(clientId);
+    if (!files || files.length === 0) return;
+    // Read the caption off the optimistic row so retries reuse it without extra state.
+    const slice = useMessageStore.getState().slices[cacheKey] as Message[] | undefined;
+    const caption = slice?.find(m => m.clientId === clientId)?.content || undefined;
+    setMessages(prev => prev.map(m =>
+      m.clientId === clientId ? { ...m, sendStatus: 'sending' as const } : m,
+    ));
+    setUploadProgressMap(prev => ({ ...prev, [clientId]: 0 }));
+    try {
+      const filesToUpload = files.map(f => ({ uri: f.uri, name: f.name, type: f.type }));
+      const response = await uploadApi.uploadToChannel(channelId, filesToUpload, caption, (p) =>
+        setUploadProgressMap(prev => ({ ...prev, [clientId]: p })),
+      );
+      if (!response.success) throw new Error('upload failed');
+      pendingUploadsRef.current.delete(clientId);
+      setUploadProgressMap(prev => { const next = { ...prev }; delete next[clientId]; return next; });
+      // The server doesn't echo clientId for uploads (idempotency is out of scope),
+      // so re-attach it here to reconcile against the optimistic row by clientId.
+      setMessages(prev => upsertMessage(prev, { ...response.data.message, clientId, sendStatus: undefined }));
+    } catch {
+      setMessages(prev => prev.map(m =>
+        m.clientId === clientId ? { ...m, sendStatus: 'failed' as const } : m,
+      ));
+    }
+  }, [channelId, cacheKey, setMessages]);
+
+  const handleRetryMessage = useCallback((message: Message) => {
+    if (!message.clientId) return;
+    if (pendingUploadsRef.current.has(message.clientId)) {
+      deliverChannelUpload(message.clientId);
+    } else {
+      deliverChannelMessage(message.content, message.clientId);
+    }
+  }, [deliverChannelMessage, deliverChannelUpload]);
+
+  // --- Typing emission (UX-06) ---
+  const handleTextChange = useCallback((text: string) => {
+    setMessageText(text);
+    if (!user?.id) return;
+    if (text.length > 0) {
+      if (!isTypingRef.current) { isTypingRef.current = true; sendTypingStart(channelId, user.id); }
+      if (typingEmitTimeout.current) clearTimeout(typingEmitTimeout.current);
+      typingEmitTimeout.current = setTimeout(() => {
+        if (isTypingRef.current) { isTypingRef.current = false; sendTypingStop(channelId, user.id); }
+      }, 3000);
+    } else {
+      if (isTypingRef.current) { isTypingRef.current = false; sendTypingStop(channelId, user.id); }
+      if (typingEmitTimeout.current) { clearTimeout(typingEmitTimeout.current); typingEmitTimeout.current = null; }
+    }
+  }, [channelId, user?.id, setMessageText]);
+
   const handleSendMessage = async () => {
-    const content = messageText.trim();
+    // Convert the displayed `@DisplayName` mentions into stable `<@id>` / `<@&id>`
+    // tokens (PE-04) before persisting/optimistic-rendering.
+    const content = toMentionTokens(messageText.trim(), mentionUsers, mentionRoles);
     const hasFiles = selectedFiles.length > 0;
     if (!content && !hasFiles) return;
-    if (isSending || isUploading) return;
+    if (isUploading) return;
 
     Keyboard.dismiss();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-    try {
-      if (hasFiles) {
-        setIsUploading(true);
-        setUploadProgress(0);
-        const filesToUpload = selectedFiles.map(f => ({ uri: f.uri, name: f.name, type: f.type }));
-        const response = await uploadApi.uploadToChannel(channelId, filesToUpload, content || undefined, (p) => setUploadProgress(p));
-        if (response.success) {
-          setMessages(prev => [...prev, response.data.message]);
-          clearDraft();
-          clearFiles();
-        }
-      } else {
-        setIsSending(true);
-        const response = await channelApi.sendMessage(channelId, content);
-        if (response.success) {
-          setMessages(prev => [...prev, response.data.message]);
-          clearDraft();
-        }
-      }
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-    } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to send message');
-    } finally {
-      setIsSending(false);
-      resetUpload();
+    // Stop the typing indicator immediately on send.
+    if (isTypingRef.current && user?.id) { isTypingRef.current = false; sendTypingStop(channelId, user.id); }
+    if (typingEmitTimeout.current) { clearTimeout(typingEmitTimeout.current); typingEmitTimeout.current = null; }
+
+    // Clear the input draft once, up front, mirroring ConversationScreen (UX-12).
+    // The typed text/caption is captured in `content` and carried onto the
+    // optimistic row, so a send/upload failure surfaces as a failed, retriable
+    // row (UX-01) without losing what the user wrote.
+    clearDraft();
+
+    // Optimistic file send (UX-01): render a placeholder with local previews now,
+    // then upload + reconcile in the background — consistent with text sends.
+    if (hasFiles) {
+      const clientId = newClientId();
+      const now = new Date().toISOString();
+      const optimisticAttachments: Attachment[] = selectedFiles.map((f, i) => ({
+        id: `temp-att-${clientId}-${i}`,
+        fileName: f.name,
+        // Use the picked file's local uri so image previews render immediately.
+        fileUrl: f.uri,
+        mimeType: f.type,
+        fileSize: f.size ?? 0,
+      }));
+      const optimistic: Message = {
+        id: `temp-${clientId}`,
+        clientId,
+        sendStatus: 'sending',
+        content,
+        authorId: user?.id ?? '',
+        author: { id: user?.id ?? '', displayName: user?.displayName ?? 'You', avatarUrl: user?.avatarUrl ?? null },
+        channelId,
+        conversationId: null,
+        mentionedUsers: [],
+        mentionedRoles: [],
+        mentionEveryone: false,
+        isEdited: false,
+        isPinned: false,
+        attachments: optimisticAttachments,
+        reactions: [],
+        parentMessageId: null,
+        replyCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+      pendingUploadsRef.current.set(clientId, selectedFiles);
+      isNearBottom.current = true;
+      setMessages(prev => [...prev, optimistic]);
+      clearFiles();
+      deliverChannelUpload(clientId);
+      return;
     }
+
+    // Optimistic text send: render immediately, then reconcile in the background.
+    const clientId = newClientId();
+    const now = new Date().toISOString();
+    const optimistic: Message = {
+      id: `temp-${clientId}`,
+      clientId,
+      sendStatus: 'sending',
+      content,
+      authorId: user?.id ?? '',
+      author: { id: user?.id ?? '', displayName: user?.displayName ?? 'You', avatarUrl: user?.avatarUrl ?? null },
+      channelId,
+      conversationId: null,
+      mentionedUsers: [],
+      mentionedRoles: [],
+      mentionEveryone: false,
+      isEdited: false,
+      isPinned: false,
+      attachments: [],
+      reactions: [],
+      parentMessageId: null,
+      replyCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    // Pin to bottom before inserting so onContentSizeChange snaps to the newest row.
+    isNearBottom.current = true;
+    setMessages(prev => [...prev, optimistic]);
+    deliverChannelMessage(content, clientId);
   };
 
   // --- Delete + Pin ---
@@ -466,7 +720,7 @@ export default function ChannelScreen() {
             </View>
           )}
 
-          <View style={[styles.messageContent, !showHeader && styles.messageContentContinued]}>
+          <View style={[styles.messageContent, !showHeader && styles.messageContentContinued, item.sendStatus === 'sending' && styles.messageContentSending]}>
             {isEditing ? (
               <View style={styles.editContainer}>
                 <TextInput
@@ -493,6 +747,8 @@ export default function ChannelScreen() {
                     style={styles.messageText}
                     mentionedUsers={mentionUsers.map(u => u.displayName)}
                     mentionedRoles={mentionRoles.map(r => r.name)}
+                    mentionUsers={mentionUsers}
+                    mentionRoles={mentionRoles}
                     mentionEveryone
                   >
                     {item.content}
@@ -512,8 +768,22 @@ export default function ChannelScreen() {
                   replyCount={item.replyCount ?? 0}
                   lastReplyAt={item.lastReplyAt}
                   latestReplyAuthors={item.latestReplyAuthors}
-                  onPress={() => navigation.navigate('Thread', { messageId: item.id, channelId, channelName: currentChannelName })}
+                  onPress={() => navigation.navigate('Thread', { messageId: item.id, channelId, channelName: currentChannelName, programId })}
                 />
+                {item.sendStatus === 'sending' && (
+                  <Text style={styles.sendStatusSending}>
+                    {item.clientId !== undefined && uploadProgressMap[item.clientId] !== undefined
+                      ? `Uploading… ${Math.round(uploadProgressMap[item.clientId] * 100)}%`
+                      : 'Sending…'}
+                  </Text>
+                )}
+                {item.sendStatus === 'failed' && (
+                  <TouchableOpacity onPress={() => handleRetryMessage(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                    <Text style={styles.sendStatusFailed}>
+                      <Ionicons name="alert-circle" size={12} color={colors.error} /> Failed to send. Tap to retry.
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </>
             )}
           </View>
@@ -522,7 +792,7 @@ export default function ChannelScreen() {
     );
 
     const handleSwipeReply = () => {
-      navigation.navigate('Thread', { messageId: item.id, channelId, channelName: currentChannelName });
+      navigation.navigate('Thread', { messageId: item.id, channelId, channelName: currentChannelName, programId });
     };
 
     if (isHighlighted) {
@@ -545,22 +815,23 @@ export default function ChannelScreen() {
   };
 
   // --- Loading / Error ---
-  if (isLoading) return <ChatLoadingState />;
-  if (error) return <ChatErrorState error={error} onRetry={() => fetchMessages()} />;
+  if (isLoading && messages.length === 0) return <ChatLoadingState />;
+  if (error && messages.length === 0) return <ChatErrorState error={error} onRetry={() => fetchMessages()} />;
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <KeyboardAvoidingView
         style={styles.keyboardAvoid}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
       >
         <ConnectionBanner />
         <FlatList
           ref={flatListRef}
           data={messages}
-          keyExtractor={item => item.id}
+          keyExtractor={item => item.clientId ?? item.id}
           renderItem={renderMessage}
+          {...CHAT_LIST_PERF_PROPS}
           keyboardDismissMode="on-drag"
           contentContainerStyle={messages.length === 0 ? styles.emptyList : styles.messageList}
           ListEmptyComponent={
@@ -580,23 +851,29 @@ export default function ChannelScreen() {
             if (contentOffset.y < 50 && hasMore && !isLoadingMore) {
               fetchMessages(true);
             }
+            // Don't let reflow events during a programmatic scroll un-pin us.
+            if (Date.now() < programmaticScrollUntil.current) return;
             const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-            const nearBottom = distanceFromBottom < 200;
+            const nearBottom = distanceFromBottom < 150;
             isNearBottom.current = nearBottom;
             setShowScrollFAB(!nearBottom);
             if (nearBottom) {
               setNewMessageCount(0);
             }
           }}
-          scrollEventThrottle={100}
+          scrollEventThrottle={16}
           inverted={false}
+          // Anchor the visible messages when older history is prepended (UX-04) so
+          // loading earlier messages doesn't teleport the viewport. minIndexForVisible:1
+          // keeps the load-more header (index 0) from fighting the anchor.
+          maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
           onScrollToIndexFailed={(info) => {
             flatListRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
           }}
           onContentSizeChange={() => {
             if ((route.params.highlightMessageId || highlightMessageId) && !hasScrolledToHighlight.current) return;
             if (messages.length > 0 && !isLoadingMore && isNearBottom.current) {
-              flatListRef.current?.scrollToEnd({ animated: false });
+              scrollToBottom(false);
             }
           }}
         />
@@ -605,11 +882,15 @@ export default function ChannelScreen() {
           visible={showScrollFAB}
           newMessageCount={newMessageCount}
           onPress={() => {
-            flatListRef.current?.scrollToEnd({ animated: true });
+            isNearBottom.current = true;
+            scrollToBottom(true);
             setNewMessageCount(0);
             setShowScrollFAB(false);
           }}
         />
+
+        {/* Typing Indicator */}
+        <TypingIndicator typingUsers={typingUsers} />
 
         {/* Attachment Preview */}
         {selectedFiles.length > 0 && (
@@ -626,10 +907,10 @@ export default function ChannelScreen() {
               <View style={styles.inputFlex}>
                 <MessageInput
                   value={messageText}
-                  onChangeText={setMessageText}
+                  onChangeText={handleTextChange}
                   onSend={handleSendMessage}
                   placeholder={`Message #${channelName}`}
-                  isSending={isSending || isUploading}
+                  isSending={isUploading}
                   users={mentionUsers}
                   roles={mentionRoles}
                   includeSpecialMentions
@@ -673,7 +954,15 @@ export default function ChannelScreen() {
           const msg = selectedMessage;
           closeActions();
           const threadMessageId = msg.parentMessageId || msg.id;
-          navigation.navigate('Thread', { messageId: threadMessageId, channelId, channelName: currentChannelName });
+          navigation.navigate('Thread', { messageId: threadMessageId, channelId, channelName: currentChannelName, programId });
+        } : undefined}
+        onForward={selectedMessage ? () => {
+          openForwardPicker(
+            navigation,
+            selectedMessage,
+            selectedMessage.author.displayName,
+            { channelId },
+          );
         } : undefined}
       />
     </SafeAreaView>
@@ -683,7 +972,7 @@ export default function ChannelScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   keyboardAvoid: { flex: 1 },
-  messageList: { paddingVertical: spacing.md },
+  messageList: { paddingTop: spacing.md, paddingBottom: spacing.lg },
   emptyList: { flex: 1 },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: spacing.xl },
   emptyTitle: { fontSize: typography.fontSize.xl, fontWeight: typography.fontWeight.bold, color: colors.text, marginBottom: spacing.sm },
@@ -707,7 +996,10 @@ const styles = StyleSheet.create({
   timestampRowContinuation: { marginLeft: 44, marginBottom: 1 },
   messageContent: { marginLeft: 44, marginTop: 1 },
   messageContentContinued: { marginTop: 1 },
+  messageContentSending: { opacity: 0.6 },
   messageText: { fontSize: typography.fontSize.md, color: colors.text, lineHeight: 22 },
+  sendStatusSending: { fontSize: typography.fontSize.xs, color: colors.textMuted, marginTop: 2 },
+  sendStatusFailed: { fontSize: typography.fontSize.xs, color: colors.error, marginTop: 2 },
 
   // Edit
   editContainer: { flex: 1 },

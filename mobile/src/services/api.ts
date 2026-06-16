@@ -5,7 +5,8 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { API_CONFIG, APP_CONFIG } from '../constants/config';
-import { ApiResponse, AuthTokens, User, Program, ProgramDetail, Message, Channel, Category, ProgramMember, Role, RoleDetail, Permission, Conversation, DMMessage, SearchResponse, ChannelSearchResult } from '../types';
+import { useConnectionStore } from '../store/connectionStore';
+import { ApiResponse, AuthTokens, User, Program, ProgramDetail, Message, Channel, Category, ProgramMember, Role, RoleDetail, Permission, Conversation, DMMessage, SearchResponse, ChannelSearchResult, ForwardDestinations, ForwardResult } from '../types';
 
 // Create axios instance
 const api: AxiosInstance = axios.create({
@@ -70,6 +71,42 @@ export function getAccessToken(): string | null {
   return accessToken;
 }
 
+// Single-flight refresh: refresh tokens are single-use on the backend, so
+// concurrent refreshers (e.g. an HTTP 401 and the socket's auth_error) MUST
+// share one in-flight request or one of them invalidates the other's token.
+let refreshPromise: Promise<string | null> | null = null;
+
+/**
+ * Refresh the access token using the stored refresh token.
+ * Returns the new access token, or null if refresh failed (in which case
+ * tokens are cleared and the refresh-failed callback fires → logout).
+ * Safe to call concurrently — callers share a single in-flight refresh.
+ */
+export function refreshAccessToken(): Promise<string | null> {
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    if (!refreshToken) return null;
+    try {
+      const response = await axios.post<ApiResponse<{ tokens: AuthTokens }>>(
+        `${API_CONFIG.BASE_URL}/auth/refresh`,
+        { refreshToken }
+      );
+      const newTokens = response.data.data.tokens;
+      await setTokens(newTokens);
+      return newTokens.accessToken;
+    } catch (refreshError) {
+      await clearTokens();
+      if (onTokenRefreshFailed) onTokenRefreshFailed();
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
 // Request interceptor - add auth token
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
@@ -81,35 +118,41 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response interceptor - handle token refresh
+// Response interceptor - handle token refresh + server availability
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    useConnectionStore.getState().setServerOk();
+    return response;
+  },
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+
+    const isNetworkFailure =
+      !error.response &&
+      (error.code === 'ECONNABORTED' || error.code === 'ERR_NETWORK' || error.message === 'Network Error');
+    const isServerDown =
+      error.response?.status === 503 ||
+      (error.response?.status === 500 &&
+        typeof error.response.data === 'object' &&
+        error.response.data !== null &&
+        (error.response.data as { error?: { message?: string } }).error?.message === 'Database error');
+
+    if (isNetworkFailure || isServerDown) {
+      useConnectionStore.getState().setServerUnavailable();
+    }
     
-    // If 401 and we haven't retried yet, try to refresh token
+    // If 401 and we haven't retried yet, try to refresh token (single-flight).
     if (error.response?.status === 401 && !originalRequest._retry && refreshToken) {
       originalRequest._retry = true;
-      
-      try {
-        const response = await axios.post<ApiResponse<{ tokens: AuthTokens }>>(
-          `${API_CONFIG.BASE_URL}/auth/refresh`,
-          { refreshToken }
-        );
-        
-        const newTokens = response.data.data.tokens;
-        await setTokens(newTokens);
-        
-        // Retry original request with new token
+
+      const newAccessToken = await refreshAccessToken();
+      if (newAccessToken) {
         if (originalRequest.headers) {
-          originalRequest.headers.Authorization = `Bearer ${newTokens.accessToken}`;
+          originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
         }
         return api(originalRequest);
-      } catch (refreshError) {
-        await clearTokens();
-        if (onTokenRefreshFailed) onTokenRefreshFailed();
-        return Promise.reject(refreshError);
       }
+      // refreshAccessToken already cleared tokens + fired the logout callback.
     }
     
     return Promise.reject(error);
@@ -596,9 +639,10 @@ export const channelApi = {
   /**
    * Send a message to a channel (optionally as a thread reply)
    */
-  async sendMessage(channelId: string, content: string, parentMessageId?: string): Promise<ApiResponse<{ message: Message }>> {
-    const body: { content: string; parentMessageId?: string } = { content };
+  async sendMessage(channelId: string, content: string, parentMessageId?: string, clientId?: string): Promise<ApiResponse<{ message: Message }>> {
+    const body: { content: string; parentMessageId?: string; clientId?: string } = { content };
     if (parentMessageId) body.parentMessageId = parentMessageId;
+    if (clientId) body.clientId = clientId;
     const response = await api.post(`/channels/${channelId}/messages`, body);
     return response.data;
   },
@@ -824,9 +868,10 @@ export const conversationApi = {
   /**
    * Send a message in a conversation (optionally as a thread reply)
    */
-  async sendMessage(conversationId: string, content: string, parentMessageId?: string): Promise<ApiResponse<{ message: DMMessage }>> {
-    const body: { content: string; parentMessageId?: string } = { content };
+  async sendMessage(conversationId: string, content: string, parentMessageId?: string, clientId?: string): Promise<ApiResponse<{ message: DMMessage }>> {
+    const body: { content: string; parentMessageId?: string; clientId?: string } = { content };
     if (parentMessageId) body.parentMessageId = parentMessageId;
+    if (clientId) body.clientId = clientId;
     const response = await api.post(`/conversations/${conversationId}/messages`, body);
     return response.data;
   },
@@ -1102,6 +1147,36 @@ export const searchApi = {
    */
   async searchChannels(query: string, limit = 10): Promise<ApiResponse<{ channels: ChannelSearchResult[] }>> {
     const response = await api.get(`/search/channels?q=${encodeURIComponent(query)}&limit=${limit}`);
+    return response.data;
+  },
+};
+
+// ============================================
+// FORWARD API
+// ============================================
+
+export const forwardApi = {
+  async getDestinations(params?: {
+    excludeChannelId?: string;
+    excludeConversationId?: string;
+  }): Promise<ApiResponse<ForwardDestinations>> {
+    const searchParams = new URLSearchParams();
+    if (params?.excludeChannelId) searchParams.append('excludeChannelId', params.excludeChannelId);
+    if (params?.excludeConversationId) {
+      searchParams.append('excludeConversationId', params.excludeConversationId);
+    }
+    const qs = searchParams.toString();
+    const response = await api.get(`/forward/destinations${qs ? `?${qs}` : ''}`);
+    return response.data;
+  },
+
+  async forwardMessage(data: {
+    messageId: string;
+    destinationType: 'channel' | 'conversation';
+    destinationId: string;
+    comment?: string;
+  }): Promise<ApiResponse<ForwardResult>> {
+    const response = await api.post('/forward', data);
     return response.data;
   },
 };

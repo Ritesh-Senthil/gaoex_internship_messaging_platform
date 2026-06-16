@@ -10,7 +10,15 @@ import { config, validateConfig } from './config';
 import { prisma, disconnectDatabase } from './config/database';
 import { initializeFirebase } from './config/firebase';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
-import { verifyAccessToken } from './utils/jwt';
+import { verifyAccessToken, cleanupExpiredTokens } from './utils/jwt';
+import { canAccessProgram, canAccessChannel, canAccessConversation } from './utils/access';
+import {
+  initSocketPresence,
+  registerSocketUser,
+  unregisterSocketUser,
+  getSocketUser,
+  userHasOtherSockets,
+} from './utils/socketPresence';
 import routes from './routes';
 
 // Validate configuration
@@ -38,6 +46,7 @@ const io = new SocketServer(httpServer, {
 
 // Store io instance for use in routes
 app.set('io', io);
+initSocketPresence(io);
 
 // ===================
 // Middleware
@@ -100,30 +109,27 @@ app.use(errorHandler);
 // Socket.io Events
 // ===================
 
-// Track socket -> userId mapping for disconnect handling
-const socketUserMap = new Map<string, string>();
-
 // Cache user profile info for typing indicators (avoid DB lookups on every keystroke)
 const userProfileCache = new Map<string, { displayName: string; avatarUrl: string | null }>();
 
 io.on('connection', (socket) => {
   console.log(`Socket connected: ${socket.id}`);
 
-  // User authentication - verify JWT and associate socket with user
-  socket.on('authenticate', async (tokenOrUserId: string) => {
+  // User authentication — a valid access token is REQUIRED. We do not accept
+  // raw user IDs; an unverifiable token disconnects the socket so it cannot
+  // join any rooms or be marked online.
+  socket.on('authenticate', async (token: string) => {
     let userId: string;
-
-    // Verify JWT token; fall back to treating as userId for backward compatibility
     try {
-      const payload = verifyAccessToken(tokenOrUserId);
+      const payload = verifyAccessToken(token);
       userId = payload.userId;
     } catch {
-      // Backward compat: accept raw userId if token verification fails (dev only)
-      userId = tokenOrUserId;
+      console.warn(`Socket ${socket.id} failed authentication — disconnecting`);
+      socket.emit('auth_error', { message: 'Invalid or expired token' });
+      socket.disconnect(true);
+      return;
     }
 
-    socketUserMap.set(socket.id, userId);
-    
     // Join user's personal room for direct notifications
     socket.join(`user:${userId}`);
     console.log(`Socket ${socket.id} authenticated as user ${userId}`);
@@ -133,9 +139,17 @@ io.on('connection', (socket) => {
       const user = await prisma.user.update({
         where: { id: userId },
         data: { isOnline: true, lastSeenAt: new Date() },
-        select: { id: true, displayName: true, avatarUrl: true },
+        select: { id: true, displayName: true, avatarUrl: true, isSuperAdmin: true },
       });
+
+      // Record auth only after we've confirmed the user exists in the DB.
+      registerSocketUser(socket.id, { userId, isSuperAdmin: user.isSuperAdmin });
       console.log(`User ${userId} marked online via socket`);
+
+      // Tell the client auth succeeded so it can (re-)join rooms only AFTER the
+      // server knows who it is — room-join authorization depends on the socket
+      // presence map being populated, so clients must not join until this ack arrives.
+      socket.emit('authenticated', { userId });
       
       // Cache profile for typing indicators (avoids DB lookups on every keystroke)
       userProfileCache.set(userId, { displayName: user.displayName, avatarUrl: user.avatarUrl });
@@ -176,8 +190,15 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Join program room
-  socket.on('join_program', (programId: string) => {
+  // Join program room — only if the socket is authenticated AND the user is a
+  // member of the program. Leaving never needs authorization.
+  socket.on('join_program', async (programId: string) => {
+    const auth = getSocketUser(socket.id);
+    if (!auth) return;
+    if (!(await canAccessProgram(auth.userId, programId, auth.isSuperAdmin))) {
+      console.warn(`Socket ${socket.id} denied join program:${programId}`);
+      return;
+    }
     socket.join(`program:${programId}`);
     console.log(`Socket ${socket.id} joined program:${programId}`);
   });
@@ -188,8 +209,14 @@ io.on('connection', (socket) => {
     console.log(`Socket ${socket.id} left program:${programId}`);
   });
 
-  // Join channel room
-  socket.on('join_channel', (channelId: string) => {
+  // Join channel room — requires membership + (for private channels) access.
+  socket.on('join_channel', async (channelId: string) => {
+    const auth = getSocketUser(socket.id);
+    if (!auth) return;
+    if (!(await canAccessChannel(auth.userId, channelId, auth.isSuperAdmin))) {
+      console.warn(`Socket ${socket.id} denied join channel:${channelId}`);
+      return;
+    }
     socket.join(`channel:${channelId}`);
     console.log(`Socket ${socket.id} joined channel:${channelId}`);
   });
@@ -200,8 +227,14 @@ io.on('connection', (socket) => {
     console.log(`Socket ${socket.id} left channel:${channelId}`);
   });
 
-  // Join conversation (DM) room
-  socket.on('join_conversation', (conversationId: string) => {
+  // Join conversation (DM) room — requires being a participant.
+  socket.on('join_conversation', async (conversationId: string) => {
+    const auth = getSocketUser(socket.id);
+    if (!auth) return;
+    if (!(await canAccessConversation(auth.userId, conversationId))) {
+      console.warn(`Socket ${socket.id} denied join conversation:${conversationId}`);
+      return;
+    }
     socket.join(`conversation:${conversationId}`);
     console.log(`Socket ${socket.id} joined conversation:${conversationId}`);
   });
@@ -214,26 +247,26 @@ io.on('connection', (socket) => {
 
   // Typing indicators — use server-known userId, enrich with cached profile
   socket.on('typing_start', (data: { channelId?: string; conversationId?: string; userId: string }) => {
-    const authenticatedUserId = socketUserMap.get(socket.id);
-    if (!authenticatedUserId) return;
+    const auth = getSocketUser(socket.id);
+    if (!auth) return;
     const room = data.channelId ? `channel:${data.channelId}` : `conversation:${data.conversationId}`;
-    const profile = userProfileCache.get(authenticatedUserId);
+    const profile = userProfileCache.get(auth.userId);
     socket.to(room).emit('user_typing', {
       ...data,
-      userId: authenticatedUserId,
+      userId: auth.userId,
       displayName: profile?.displayName || 'Someone',
       avatarUrl: profile?.avatarUrl || null,
     });
   });
 
   socket.on('typing_stop', (data: { channelId?: string; conversationId?: string; userId: string }) => {
-    const authenticatedUserId = socketUserMap.get(socket.id);
-    if (!authenticatedUserId) return;
+    const auth = getSocketUser(socket.id);
+    if (!auth) return;
     const room = data.channelId ? `channel:${data.channelId}` : `conversation:${data.conversationId}`;
-    const profile = userProfileCache.get(authenticatedUserId);
+    const profile = userProfileCache.get(auth.userId);
     socket.to(room).emit('user_stopped_typing', {
       ...data,
-      userId: authenticatedUserId,
+      userId: auth.userId,
       displayName: profile?.displayName || 'Someone',
       avatarUrl: profile?.avatarUrl || null,
     });
@@ -241,14 +274,15 @@ io.on('connection', (socket) => {
 
   // Handle disconnect - mark user offline (handles force-quit, network loss, etc.)
   socket.on('disconnect', async () => {
-    const userId = socketUserMap.get(socket.id);
+    const auth = getSocketUser(socket.id);
+    const userId = auth?.userId;
     console.log(`Socket disconnected: ${socket.id} (user: ${userId || 'unknown'})`);
     
     if (userId) {
-      socketUserMap.delete(socket.id);
+      unregisterSocketUser(socket.id);
       
       // Check if user has any other active sockets (multiple devices)
-      const hasOtherSockets = Array.from(socketUserMap.values()).includes(userId);
+      const hasOtherSockets = userHasOtherSockets(userId);
       
       if (!hasOtherSockets) {
         // Clean up profile cache since no more active sockets
@@ -257,7 +291,7 @@ io.on('connection', (socket) => {
         // (to handle brief disconnections during network switches)
         setTimeout(async () => {
           // Double-check no new connection was made
-          const stillNoSockets = !Array.from(socketUserMap.values()).includes(userId);
+          const stillNoSockets = !userHasOtherSockets(userId);
           if (stillNoSockets) {
             try {
               await prisma.user.update({
@@ -327,6 +361,39 @@ const connectDatabaseWithRetry = async (retryDelayMs = 10000): Promise<void> => 
   }
 };
 
+// Periodically purge expired refresh-token rows so they don't accumulate
+// forever (INF-03). Runs once on startup and then every 24h. Overlapping runs
+// are skipped, errors are caught/logged so a failure can't crash the process,
+// and the timer is unref'd so it never keeps the process alive during shutdown.
+const TOKEN_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+const scheduleTokenCleanup = (): void => {
+  let cleanupInFlight = false;
+
+  const runCleanup = async (): Promise<void> => {
+    if (cleanupInFlight) {
+      console.warn('Skipping expired-token cleanup — previous run still in flight');
+      return;
+    }
+    cleanupInFlight = true;
+    try {
+      const deleted = await cleanupExpiredTokens();
+      console.log(`🧹 Expired-token cleanup removed ${deleted} row(s)`);
+    } catch (error) {
+      console.error('Expired-token cleanup failed:', error instanceof Error ? error.message : error);
+    } finally {
+      cleanupInFlight = false;
+    }
+  };
+
+  // Run once on startup, then on a recurring interval.
+  void runCleanup();
+  const interval = setInterval(() => {
+    void runCleanup();
+  }, TOKEN_CLEANUP_INTERVAL_MS);
+  interval.unref();
+};
+
 const startServer = async () => {
   // Start the HTTP server immediately so the service stays up and can serve
   // /health even if the database isn't reachable yet.
@@ -338,6 +405,9 @@ const startServer = async () => {
 
   // Connect to the database (non-blocking, retries on failure).
   void connectDatabaseWithRetry();
+
+  // Schedule periodic cleanup of expired refresh tokens (INF-03).
+  scheduleTokenCleanup();
 };
 
 // Graceful shutdown

@@ -1,9 +1,11 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
 import { prisma } from '../config/database';
 import { authenticate, requireSuperAdmin } from '../middleware/auth';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../middleware/errorHandler';
 import { Permissions, PermissionPresets, hasPermission } from '../utils/permissions';
 import { getUserPermissions } from '../utils/roleHelpers';
+import { validateBody } from '../middleware/validate';
 import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import { sendPushToUsers, buildProgramInviteNotification } from '../services/pushNotification';
@@ -14,6 +16,75 @@ const router = Router();
 function generateInviteCode(): string {
   return crypto.randomBytes(4).toString('hex').toUpperCase();
 }
+
+// ── Validation schemas (SEC-07) ──
+const createProgramSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, 'Program name is required')
+    .max(100, 'Program name cannot exceed 100 characters'),
+  description: z.string().nullish(),
+  iconUrl: z.string().nullish(),
+  isPrivate: z.boolean().optional(),
+  startDate: z.string().nullish(),
+  endDate: z.string().nullish(),
+});
+
+const updateProgramSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, 'Program name cannot be empty')
+    .max(100, 'Program name cannot exceed 100 characters')
+    .optional(),
+  description: z.string().nullish(),
+  iconUrl: z.string().nullish(),
+  status: z.enum(['ACTIVE', 'COMPLETED', 'ARCHIVED']).optional(),
+});
+
+const joinProgramSchema = z.object({
+  inviteCode: z.string().trim().min(1, 'Invite code is required'),
+  message: z.string().nullish(),
+});
+
+const transferOwnershipSchema = z.object({
+  newOwnerId: z.string().min(1, 'New owner ID is required'),
+});
+
+const createCategorySchema = z.object({
+  name: z.string().trim().min(1, 'Category name is required'),
+});
+
+const updateCategorySchema = z.object({
+  name: z.string().trim().optional(),
+});
+
+const createChannelSchema = z.object({
+  name: z.string().trim().min(1, 'Channel name is required'),
+  topic: z.string().nullish(),
+  type: z.enum(['TEXT', 'ANNOUNCEMENT']).optional(),
+  categoryId: z.string().nullish(),
+  isPrivate: z.boolean().optional(),
+});
+
+const updateChannelSchema = z.object({
+  name: z.string().trim().min(1, 'Channel name cannot be empty').optional(),
+  topic: z.string().nullish(),
+  type: z.enum(['TEXT', 'ANNOUNCEMENT']).optional(),
+  categoryId: z.string().nullish(),
+  isPrivate: z.boolean().optional(),
+});
+
+const moveChannelSchema = z.object({
+  categoryId: z.string().nullish(),
+  position: z.number().int().optional(),
+});
+
+const setChannelPermissionsSchema = z.object({
+  roleIds: z.array(z.string()).optional(),
+  userIds: z.array(z.string()).optional(),
+});
 
 /**
  * GET /api/programs
@@ -129,7 +200,7 @@ router.get('/default', authenticate, async (req: Request, res: Response, next: N
  * POST /api/programs
  * Create a new program
  */
-router.post('/', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/', authenticate, validateBody(createProgramSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.id;
     const { name, description, iconUrl, isPrivate, startDate, endDate } = req.body;
@@ -474,7 +545,7 @@ router.get('/:id', authenticate, async (req: Request, res: Response, next: NextF
  * PATCH /api/programs/:id
  * Update program
  */
-router.patch('/:id', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.patch('/:id', authenticate, validateBody(updateProgramSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const userId = req.user!.id;
@@ -577,7 +648,7 @@ router.delete('/:id', authenticate, async (req: Request, res: Response, next: Ne
  * POST /api/programs/join
  * Join program via invite code
  */
-router.post('/join', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/join', authenticate, validateBody(joinProgramSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.id;
     const { inviteCode, message } = req.body;
@@ -1273,7 +1344,7 @@ router.post('/:id/join-requests/:requestId/reject', authenticate, async (req: Re
  * POST /api/programs/:id/transfer-ownership
  * Transfer program ownership to another user
  */
-router.post('/:id/transfer-ownership', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/transfer-ownership', authenticate, validateBody(transferOwnershipSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
     const userId = req.user!.id;
@@ -1444,7 +1515,7 @@ router.patch('/:id/restore', authenticate, async (req: Request, res: Response, n
  * POST /api/programs/:id/categories
  * Create a new category
  */
-router.post('/:id/categories', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/categories', authenticate, validateBody(createCategorySchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id: programId } = req.params;
     const userId = req.user!.id;
@@ -1496,7 +1567,7 @@ router.post('/:id/categories', authenticate, async (req: Request, res: Response,
  * PATCH /api/programs/:id/categories/:categoryId
  * Update a category
  */
-router.patch('/:id/categories/:categoryId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.patch('/:id/categories/:categoryId', authenticate, validateBody(updateCategorySchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id: programId, categoryId } = req.params;
     const userId = req.user!.id;
@@ -1593,7 +1664,7 @@ router.delete('/:id/categories/:categoryId', authenticate, async (req: Request, 
  * POST /api/programs/:id/channels
  * Create a new channel
  */
-router.post('/:id/channels', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/channels', authenticate, validateBody(createChannelSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id: programId } = req.params;
     const userId = req.user!.id;
@@ -1676,7 +1747,7 @@ router.post('/:id/channels', authenticate, async (req: Request, res: Response, n
  * PATCH /api/programs/:id/channels/:channelId
  * Update a channel
  */
-router.patch('/:id/channels/:channelId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.patch('/:id/channels/:channelId', authenticate, validateBody(updateChannelSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id: programId, channelId } = req.params;
     const userId = req.user!.id;
@@ -1818,7 +1889,7 @@ router.delete('/:id/channels/:channelId', authenticate, async (req: Request, res
  * POST /api/programs/:id/channels/:channelId/move
  * Move a channel to a different category
  */
-router.post('/:id/channels/:channelId/move', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/channels/:channelId/move', authenticate, validateBody(moveChannelSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id: programId, channelId } = req.params;
     const userId = req.user!.id;
@@ -1949,7 +2020,7 @@ router.get('/:id/channels/:channelId/permissions', authenticate, async (req: Req
  * PUT /api/programs/:id/channels/:channelId/permissions
  * Set channel permission overrides (for private channels)
  */
-router.put('/:id/channels/:channelId/permissions', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.put('/:id/channels/:channelId/permissions', authenticate, validateBody(setChannelPermissionsSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id: programId, channelId } = req.params;
     const userId = req.user!.id;

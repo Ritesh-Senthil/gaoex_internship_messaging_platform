@@ -4,12 +4,16 @@
  */
 
 import { create } from 'zustand';
-import { Channel, Category } from '../types';
+import { Channel, Category, ProgramDetail } from '../types';
+import { programApi } from '../services/api';
 
 interface ChannelState {
   // State - organized by program
   channelsByProgram: Record<string, Channel[]>; // programId -> channels (uncategorized)
   categoriesByProgram: Record<string, Category[]>; // programId -> categories (with channels)
+  
+  // Actions - Fetch
+  fetchProgramChannels: (programId: string) => Promise<ProgramDetail>;
   
   // Actions - Channels
   setChannels: (programId: string, channels: Channel[], categories: Category[]) => void;
@@ -32,6 +36,20 @@ export const useChannelStore = create<ChannelState>((set, get) => ({
   // Initial state
   channelsByProgram: {},
   categoriesByProgram: {},
+  
+  /**
+   * Fetch a program's channels/categories from the API and populate the store.
+   * Returns the full ProgramDetail so callers can use program-level metadata.
+   */
+  fetchProgramChannels: async (programId: string) => {
+    const response = await programApi.getProgram(programId);
+    if (!response.success) {
+      throw new Error('Failed to load program');
+    }
+    const program = response.data.program;
+    get().setChannels(programId, program.channels, program.categories);
+    return program;
+  },
   
   /**
    * Set all channels and categories for a program (from API)
@@ -294,9 +312,14 @@ export const useChannelStore = create<ChannelState>((set, get) => ({
   },
 }));
 
-// Selector hooks for better performance
-export const useProgramChannels = (programId: string) => 
-  useChannelStore((state) => state.channelsByProgram[programId] || []);
+// Stable empty references so selectors with no cached slice don't re-render in a loop
+// (React 19 / useSyncExternalStore requires getSnapshot to return a cached value).
+const EMPTY_CHANNELS: Channel[] = [];
+const EMPTY_CATEGORIES: Category[] = [];
 
-export const useProgramCategories = (programId: string) => 
-  useChannelStore((state) => state.categoriesByProgram[programId] || []);
+// Selector hooks for better performance
+export const useProgramChannels = (programId: string) =>
+  useChannelStore((state) => state.channelsByProgram[programId] ?? EMPTY_CHANNELS);
+
+export const useProgramCategories = (programId: string) =>
+  useChannelStore((state) => state.categoriesByProgram[programId] ?? EMPTY_CATEGORIES);
