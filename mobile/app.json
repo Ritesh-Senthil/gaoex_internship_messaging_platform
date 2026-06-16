@@ -42,6 +42,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/withIosModularHeaders",
       "expo-secure-store",
       "expo-web-browser",
       [
