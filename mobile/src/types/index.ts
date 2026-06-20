@@ -436,6 +436,8 @@ export type RootStackParamList = {
   
   // Main Stack
   Main: undefined;
+  /** [INTERNSHIP_STORY] — remove when reverting feature */
+  InternshipStory: undefined;
   ProgramDetail: { programId: string };
   Channel: { channelId: string; channelName: string; programId: string; highlightMessageId?: string };
   MemberDirectory: { programId: string; programName: string };

@@ -51,6 +51,8 @@ import ChannelPermissionsScreen from '../screens/ChannelPermissionsScreen';
 import SearchScreen from '../screens/SearchScreen';
 import PinnedMessagesScreen from '../screens/PinnedMessagesScreen';
 import ForwardDestinationScreen from '../screens/ForwardDestinationScreen';
+import { ENABLE_INTERNSHIP_STORY } from '../features/internshipStory';
+import { internshipStoryScreenProps } from '../features/internshipStoryNavigation';
 
 // Create navigators
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -266,6 +268,8 @@ export default function AppNavigator() {
           // Main App Stack
           <>
             <Stack.Screen name="Main" component={MainTabs} />
+            {/* [INTERNSHIP_STORY] — remove block + feature files to revert */}
+            {ENABLE_INTERNSHIP_STORY ? <Stack.Screen {...internshipStoryScreenProps} /> : null}
             <Stack.Screen
               name="ProgramDetail"
               component={ProgramDetailScreen}

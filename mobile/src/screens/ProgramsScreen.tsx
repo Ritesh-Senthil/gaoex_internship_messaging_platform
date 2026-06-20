@@ -35,6 +35,7 @@ import {
   ProgramUpdatedEventData,
   ProgramDeletedEventData,
 } from '../services/socket';
+import { ENABLE_INTERNSHIP_STORY } from '../features/internshipStory';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -128,6 +129,7 @@ export default function ProgramsScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSheet, setShowSheet] = useState(false);
+  const [showHeaderMenu, setShowHeaderMenu] = useState(false);
 
   const fetchPrograms = useCallback(async (showRefresh = false) => {
     try {
@@ -209,6 +211,11 @@ export default function ProgramsScreen() {
     setShowSheet(true);
   };
 
+  const handleOpenInternshipStory = () => {
+    setShowHeaderMenu(false);
+    navigation.navigate('InternshipStory');
+  };
+
   // ── Render helpers ──────────────────────────────────────
 
   const renderProgramCard = ({ item }: { item: Program }) => (
@@ -265,6 +272,21 @@ export default function ProgramsScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Programs</Text>
+        {/* [INTERNSHIP_STORY] — header menu entry */}
+        {ENABLE_INTERNSHIP_STORY ? (
+          <Pressable
+            style={styles.headerMenuBtn}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setShowHeaderMenu(true);
+            }}
+            hitSlop={12}
+            accessibilityLabel="Open programs menu"
+            accessibilityRole="button"
+          >
+            <Ionicons name="ellipsis-horizontal" size={22} color={colors.text} />
+          </Pressable>
+        ) : null}
       </View>
 
       {/* Grid */}
@@ -335,6 +357,38 @@ export default function ProgramsScreen() {
           </View>
         </Pressable>
       </Modal>
+
+      {/* [INTERNSHIP_STORY] — "Read the internship story" menu */}
+      {ENABLE_INTERNSHIP_STORY ? (
+        <Modal
+          visible={showHeaderMenu}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowHeaderMenu(false)}
+        >
+          <Pressable style={styles.sheetOverlay} onPress={() => setShowHeaderMenu(false)}>
+            <View style={styles.sheetContent}>
+              <View style={styles.sheetHandle} />
+              <Text style={styles.sheetTitle}>More</Text>
+
+              <TouchableOpacity style={styles.sheetOption} onPress={handleOpenInternshipStory}>
+                <View style={styles.sheetIconCircle}>
+                  <Ionicons name="book-outline" size={22} color={colors.primary} />
+                </View>
+                <View style={styles.sheetOptionText}>
+                  <Text style={styles.sheetOptionTitle}>Read the internship story</Text>
+                  <Text style={styles.sheetOptionDesc}>Learn about GAOEX and the mission behind InternHub</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.sheetCancel} onPress={() => setShowHeaderMenu(false)}>
+                <Text style={styles.sheetCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Modal>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -354,8 +408,15 @@ const styles = StyleSheet.create({
 
   // Header
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
+  },
+  headerMenuBtn: {
+    padding: spacing.sm,
+    marginRight: -spacing.sm,
   },
   headerTitle: {
     fontSize: typography.fontSize.xxl,
