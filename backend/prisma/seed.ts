@@ -71,8 +71,29 @@ async function main() {
         where: { id: superAdmin.id },
         data: { isSuperAdmin: true },
       });
+      superAdmin = { ...superAdmin, isSuperAdmin: true };
     }
     console.log(`   ℹ️  Super Admin already exists: ${superAdmin.email}`);
+  }
+
+  // Only one super admin — demote any others (e.g. stale seed placeholder accounts)
+  const demoted = await prisma.user.updateMany({
+    where: { isSuperAdmin: true, id: { not: superAdmin.id } },
+    data: { isSuperAdmin: false },
+  });
+  if (demoted.count > 0) {
+    console.log(`   ✅ Demoted ${demoted.count} other super admin account(s)`);
+  }
+
+  // In production, never keep non-login placeholder seed accounts
+  if (
+    process.env.NODE_ENV === 'production' &&
+    superAdmin.authProviderId.startsWith('seed-admin-')
+  ) {
+    console.warn(
+      '   ⚠️  SUPER_ADMIN_EMAIL points to a seed placeholder in production.',
+      'Set SUPER_ADMIN_EMAIL to your real Google email, sign in once, then re-run seed.',
+    );
   }
 
   // ============================================
