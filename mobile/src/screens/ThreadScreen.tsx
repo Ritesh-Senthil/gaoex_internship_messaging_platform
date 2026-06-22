@@ -18,13 +18,15 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
-  Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, RouteProp, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useHeaderHeight } from '@react-navigation/elements';
 import { Ionicons } from '@expo/vector-icons';
+
+import StackBackButton from '../components/StackBackButton';
+import { useKeyboardScrollOnShow } from '../hooks/useKeyboardScrollOnShow';
 
 import { colors, spacing, typography, borderRadius } from '../constants/theme';
 import { CHAT_LIST_PERF_PROPS } from '../constants/listPerf';
@@ -133,6 +135,12 @@ export default function ThreadScreen() {
   const isNearBottom = useRef(true);
   const [showScrollFAB, setShowScrollFAB] = useState(false);
 
+  const scrollToBottom = useCallback((animated: boolean) => {
+    flatListRef.current?.scrollToEnd({ animated });
+  }, []);
+
+  useKeyboardScrollOnShow(flatListRef, isNearBottom, scrollToBottom);
+
   // --- Shared hooks ---
   const { handleAddReaction, handleToggleReaction, applyReactionAdded, applyReactionRemoved } =
     useReactions(user?.id, user?.displayName);
@@ -146,6 +154,8 @@ export default function ThreadScreen() {
       headerShown: true,
       headerStyle: { backgroundColor: colors.backgroundSecondary },
       headerTintColor: colors.text,
+      headerBackVisible: false,
+      headerLeft: () => <StackBackButton />,
       headerTitle: () => (
         <View style={{ alignItems: 'center' }}>
           <Text style={{ fontSize: typography.fontSize.lg, fontWeight: typography.fontWeight.semibold, color: colors.text }}>Thread</Text>
@@ -382,7 +392,6 @@ export default function ThreadScreen() {
   const handleSendReply = () => {
     const content = messageText.trim();
     if (!content) return;
-    Keyboard.dismiss();
 
     // Optimistic reply: render immediately, then reconcile in the background.
     const clientId = newClientId();

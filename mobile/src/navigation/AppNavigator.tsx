@@ -289,6 +289,7 @@ export default function AppNavigator() {
                 headerStyle: { backgroundColor: colors.backgroundSecondary },
                 headerTintColor: colors.text,
                 headerTitleStyle: { fontWeight: '600' },
+                headerBackVisible: false,
                 title: `#${route.params?.channelName || 'Channel'}`,
               })}
             />
@@ -395,6 +396,7 @@ export default function AppNavigator() {
                 headerStyle: { backgroundColor: colors.backgroundSecondary },
                 headerTintColor: colors.text,
                 headerTitleStyle: { fontWeight: '600' },
+                headerBackVisible: false,
                 title: route.params?.name || 'Conversation',
               })}
             />
@@ -428,6 +430,7 @@ export default function AppNavigator() {
                 headerShown: true,
                 headerStyle: { backgroundColor: colors.backgroundSecondary },
                 headerTintColor: colors.text,
+                headerBackVisible: false,
                 title: 'Thread',
               }}
             />

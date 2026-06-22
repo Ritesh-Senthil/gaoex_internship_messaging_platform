@@ -14,6 +14,8 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Keyboard,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -108,6 +110,11 @@ export default function JoinProgramScreen() {
         </View>
 
         {/* Input */}
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Invite Code</Text>
           <TextInput
@@ -120,6 +127,8 @@ export default function JoinProgramScreen() {
             autoCorrect={false}
             maxLength={20}
             editable={!isLoading}
+            returnKeyType="done"
+            onSubmitEditing={() => Keyboard.dismiss()}
           />
           <Text style={styles.hint}>
             Invite codes are case-insensitive
@@ -146,6 +155,7 @@ export default function JoinProgramScreen() {
             Ask your program facilitator or team lead to share the invite code with you.
           </Text>
         </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -159,6 +169,9 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     padding: spacing.lg,
+  },
+  scrollContent: {
+    flexGrow: 1,
   },
   header: {
     alignItems: 'center',

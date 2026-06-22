@@ -42,7 +42,7 @@ export const GOOGLE_AUTH_CONFIG = {
 // App Constants
 export const APP_CONFIG = {
   APP_NAME: 'InternHub',
-  VERSION: '1.0.2',
+  VERSION: '1.0.3',
   
   // Pagination
   DEFAULT_PAGE_SIZE: 50,

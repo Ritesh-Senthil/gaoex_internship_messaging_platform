@@ -15,6 +15,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -153,6 +155,8 @@ export default function CreateProgramScreen() {
                 onChangeText={setName}
                 maxLength={100}
                 autoFocus
+                returnKeyType="done"
+                onSubmitEditing={() => Keyboard.dismiss()}
               />
               <Text style={styles.charCount}>{name.length}/100</Text>
             </View>
@@ -185,6 +189,9 @@ export default function CreateProgramScreen() {
                 multiline
                 numberOfLines={5}
                 textAlignVertical="top"
+                blurOnSubmit
+                returnKeyType="done"
+                onSubmitEditing={() => Keyboard.dismiss()}
               />
               <Text style={styles.charCount}>{description.length}/500</Text>
             </View>
@@ -273,6 +280,8 @@ export default function CreateProgramScreen() {
         style={styles.keyboardView}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+          <View style={styles.flex}>
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={handleBack} style={styles.backButton} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -296,7 +305,12 @@ export default function CreateProgramScreen() {
         </View>
 
         {/* Content */}
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
           {renderStep()}
         </ScrollView>
 
@@ -319,6 +333,8 @@ export default function CreateProgramScreen() {
             )}
           </TouchableOpacity>
         </View>
+          </View>
+        </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -330,6 +346,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   keyboardView: {
+    flex: 1,
+  },
+  flex: {
     flex: 1,
   },
   header: {

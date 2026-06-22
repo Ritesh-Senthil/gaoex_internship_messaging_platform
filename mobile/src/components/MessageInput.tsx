@@ -22,6 +22,7 @@ import MentionAutocomplete, {
   filterMentionSuggestions,
   detectMentionQuery,
 } from './MentionAutocomplete';
+import { shouldIgnoreStalePostSendChange } from '../utils/messageInputGuard';
 
 interface MessageInputProps {
   value: string;
@@ -56,10 +57,9 @@ export default function MessageInput({
   // mention is inserted, then cleared so the user regains normal control.
   const [selection, setSelection] = useState<{ start: number; end: number } | undefined>(undefined);
   const inputRef = useRef<TextInput>(null);
-  // After send, iOS may commit a pending autocorrect to the native field and fire
-  // onChangeText even though we already cleared the controlled value. Swallow those
-  // stale events so the corrected text doesn't reappear as a draft.
-  const ignoreChangeCountRef = useRef(0);
+  // After send, iOS may replay the previous message via onChangeText (autocorrect).
+  // Track what was sent so we ignore replays without swallowing the first new keystroke.
+  const lastSentTextRef = useRef<string | null>(null);
   // Latest known caret position (start of selection), kept in a ref to avoid
   // stale-closure issues between onChangeText and onSelectionChange.
   const caretRef = useRef(0);
@@ -91,9 +91,11 @@ export default function MessageInput({
   }, [value, selection, refreshMention]);
 
   const handleTextChange = useCallback((text: string) => {
-    if (ignoreChangeCountRef.current > 0) {
-      ignoreChangeCountRef.current--;
-      return;
+    if (lastSentTextRef.current !== null) {
+      if (shouldIgnoreStalePostSendChange(lastSentTextRef.current, text, value)) {
+        return;
+      }
+      lastSentTextRef.current = null;
     }
 
     // onChangeText doesn't report the caret, so estimate it from the edit delta
@@ -134,9 +136,7 @@ export default function MessageInput({
     if (canSendNow && !isSending) {
       setSuggestions([]);
       mentionRangeRef.current = null;
-      // Parent clears the draft synchronously in onSend; ignore the autocorrect
-      // onChangeText iOS often emits right after (sometimes twice).
-      ignoreChangeCountRef.current = 2;
+      lastSentTextRef.current = value;
       onSend();
       // Keep the native field in sync with the cleared controlled value.
       requestAnimationFrame(() => {

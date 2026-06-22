@@ -6,7 +6,7 @@
  * actions; shared components for loading/error states, thread indicator.
  */
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,6 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
-  Keyboard,
   Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -26,6 +25,9 @@ import { useRoute, RouteProp, useNavigation, useFocusEffect } from '@react-navig
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useHeaderHeight } from '@react-navigation/elements';
 import { Ionicons } from '@expo/vector-icons';
+
+import StackBackButton from '../components/StackBackButton';
+import { useKeyboardScrollOnShow } from '../hooks/useKeyboardScrollOnShow';
 
 import { colors, spacing, typography, borderRadius } from '../constants/theme';
 import { CHAT_LIST_PERF_PROPS } from '../constants/listPerf';
@@ -138,6 +140,8 @@ export default function ConversationScreen() {
     flatListRef.current?.scrollToEnd({ animated });
   }, []);
 
+  useKeyboardScrollOnShow(flatListRef, isNearBottom, scrollToBottom);
+
   // --- Shared hooks ---
   const { isMuted, isMuteLoading, handleToggleMute } = useMute('conversation', conversationId);
   const { handleAddReaction, handleToggleReaction, applyReactionAdded, applyReactionRemoved } =
@@ -170,9 +174,58 @@ export default function ConversationScreen() {
   }, [navigation, conversationId, displayName]);
 
   // --- Header ---
+  const headerRight = useMemo(
+    () => (
+      <View style={headerStyles.rightContainer}>
+        <TouchableOpacity
+          onPress={() => navigation.navigate('PinnedMessages', { conversationId, title: displayName })}
+          style={headerStyles.iconButton}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="pin-outline" size={22} color={colors.text} />
+        </TouchableOpacity>
+        {isGroup ? (
+          <TouchableOpacity
+            onPress={handleGroupInfoPress}
+            style={headerStyles.iconButton}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="ellipsis-horizontal" size={22} color={colors.text} />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            onPress={handleToggleMute}
+            style={headerStyles.iconButton}
+            disabled={isMuteLoading}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons
+              name={isMuted ? 'notifications-off-outline' : 'notifications-outline'}
+              size={22}
+              color={colors.text}
+              style={{ opacity: isMuteLoading ? 0.4 : 1 }}
+            />
+          </TouchableOpacity>
+        )}
+      </View>
+    ),
+    [
+      navigation,
+      conversationId,
+      displayName,
+      isGroup,
+      handleGroupInfoPress,
+      handleToggleMute,
+      isMuted,
+      isMuteLoading,
+    ],
+  );
+
   useEffect(() => {
     navigation.setOptions({
       title: displayName,
+      headerBackVisible: false,
+      headerLeft: () => <StackBackButton />,
       headerTitle: isGroup
         ? () => (
             <TouchableOpacity onPress={handleGroupInfoPress} activeOpacity={0.7} style={headerStyles.titleContainer}>
@@ -185,42 +238,9 @@ export default function ConversationScreen() {
             </TouchableOpacity>
           )
         : undefined,
-      headerRight: () => (
-        <View style={headerStyles.rightContainer}>
-          <TouchableOpacity
-            onPress={() => navigation.navigate('PinnedMessages', { conversationId, title: displayName })}
-            style={headerStyles.iconButton}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="pin-outline" size={22} color={colors.text} />
-          </TouchableOpacity>
-          {isGroup ? (
-            <TouchableOpacity
-              onPress={handleGroupInfoPress}
-              style={headerStyles.iconButton}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Ionicons name="ellipsis-horizontal" size={22} color={colors.text} />
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              onPress={handleToggleMute}
-              style={headerStyles.iconButton}
-              disabled={isMuteLoading}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Ionicons
-                name={isMuted ? 'notifications-off-outline' : 'notifications-outline'}
-                size={22}
-                color={colors.text}
-                style={{ opacity: isMuteLoading ? 0.4 : 1 }}
-              />
-            </TouchableOpacity>
-          )}
-        </View>
-      ),
+      headerRight: () => headerRight,
     });
-  }, [displayName, navigation, isMuted, isMuteLoading, handleToggleMute, isGroup, participantCount, handleGroupInfoPress, conversationId]);
+  }, [displayName, navigation, isGroup, participantCount, handleGroupInfoPress, headerRight]);
 
   // --- Fetch messages ---
   const fetchMessages = useCallback(async (loadMore = false) => {
@@ -528,7 +548,6 @@ export default function ConversationScreen() {
     if (typingEmitTimeout.current) { clearTimeout(typingEmitTimeout.current); typingEmitTimeout.current = null; }
 
     clearDraft();
-    Keyboard.dismiss();
 
     // Optimistic file send (UX-01): render a placeholder with local previews now,
     // then upload + reconcile in the background — consistent with text sends.

@@ -6,7 +6,7 @@
  * actions; shared components for loading/error states, thread indicator.
  */
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,6 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
-  Keyboard,
   Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -26,6 +25,9 @@ import { useRoute, RouteProp, useNavigation, useFocusEffect } from '@react-navig
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useHeaderHeight } from '@react-navigation/elements';
 import { Ionicons } from '@expo/vector-icons';
+
+import StackBackButton from '../components/StackBackButton';
+import { useKeyboardScrollOnShow } from '../hooks/useKeyboardScrollOnShow';
 
 import { colors, spacing, typography, borderRadius } from '../constants/theme';
 import { CHAT_LIST_PERF_PROPS } from '../constants/listPerf';
@@ -144,6 +146,8 @@ export default function ChannelScreen() {
     flatListRef.current?.scrollToEnd({ animated });
   }, []);
 
+  useKeyboardScrollOnShow(flatListRef, isNearBottom, scrollToBottom);
+
   // --- Shared hooks ---
   const { isMuted, isMuteLoading, handleToggleMute } = useMute('channel', channelId);
   const { handleAddReaction, handleToggleReaction, applyReactionAdded, applyReactionRemoved } =
@@ -171,33 +175,40 @@ export default function ChannelScreen() {
   });
 
   // --- Header with pin + mute (Ionicons) ---
+  const headerRight = useMemo(
+    () => (
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <TouchableOpacity
+          onPress={() => navigation.navigate('PinnedMessages', { channelId, title: `#${currentChannelName}`, programId })}
+          style={{ minWidth: 44, minHeight: 44, justifyContent: 'center', alignItems: 'center' }}
+        >
+          <Ionicons name="pin-outline" size={22} color={colors.text} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={handleToggleMute}
+          style={{ minWidth: 44, minHeight: 44, justifyContent: 'center', alignItems: 'center' }}
+          disabled={isMuteLoading}
+        >
+          <Ionicons
+            name={isMuted ? 'notifications-off-outline' : 'notifications-outline'}
+            size={22}
+            color={colors.text}
+            style={{ opacity: isMuteLoading ? 0.4 : 1 }}
+          />
+        </TouchableOpacity>
+      </View>
+    ),
+    [navigation, channelId, currentChannelName, programId, handleToggleMute, isMuted, isMuteLoading],
+  );
+
   useEffect(() => {
     navigation.setOptions({
       title: `#${currentChannelName}`,
-      headerRight: () => (
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <TouchableOpacity
-            onPress={() => navigation.navigate('PinnedMessages', { channelId, title: `#${currentChannelName}`, programId })}
-            style={{ minWidth: 44, minHeight: 44, justifyContent: 'center', alignItems: 'center' }}
-          >
-            <Ionicons name="pin-outline" size={22} color={colors.text} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={handleToggleMute}
-            style={{ minWidth: 44, minHeight: 44, justifyContent: 'center', alignItems: 'center' }}
-            disabled={isMuteLoading}
-          >
-            <Ionicons
-              name={isMuted ? 'notifications-off-outline' : 'notifications-outline'}
-              size={22}
-              color={colors.text}
-              style={{ opacity: isMuteLoading ? 0.4 : 1 }}
-            />
-          </TouchableOpacity>
-        </View>
-      ),
+      headerBackVisible: false,
+      headerLeft: () => <StackBackButton />,
+      headerRight: () => headerRight,
     });
-  }, [currentChannelName, navigation, isMuted, isMuteLoading, handleToggleMute, channelId, programId]);
+  }, [currentChannelName, navigation, headerRight]);
 
   // --- Fetch messages ---
   const fetchMessages = useCallback(async (loadMore = false) => {
@@ -530,7 +541,6 @@ export default function ChannelScreen() {
     if (!content && !hasFiles) return;
     if (isUploading) return;
 
-    Keyboard.dismiss();
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     // Stop the typing indicator immediately on send.

@@ -27,6 +27,7 @@ import { useUnreadStore } from '../store/unreadStore';
 import { useAuthStore } from '../store/authStore';
 import { useMuteStore } from '../store/muteStore';
 import { getActiveConversationId } from '../store/activeChatStore';
+import { applyProfileUpdateToConversation } from '../utils/conversationDisplay';
 import { 
   subscribeToUnreadEvents,
   subscribeToPresenceEvents,
@@ -56,11 +57,13 @@ export default function ConversationsListScreen() {
   const { user } = useAuthStore();
   const { conversationMutes, initConversationMutes } = useMuteStore();
 
-  const fetchConversations = useCallback(async (showRefresh = false) => {
+  const fetchConversations = useCallback(async (options?: { refresh?: boolean; silent?: boolean }) => {
+    const showRefresh = options?.refresh ?? false;
+    const silent = options?.silent ?? false;
     try {
       if (showRefresh) {
         setIsRefreshing(true);
-      } else {
+      } else if (!silent) {
         setIsLoading(true);
       }
       setError(null);
@@ -85,18 +88,30 @@ export default function ConversationsListScreen() {
         initConversationMutes(mutes);
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to load conversations');
+      if (!silent) {
+        setError(err.message || 'Failed to load conversations');
+      }
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [setAllConversationUnreads]);
+  }, [setAllConversationUnreads, initConversationMutes]);
 
   useEffect(() => {
     fetchConversations();
   }, [fetchConversations]);
 
-  // Subscribe to DM unread events
+  const skipInitialFocusRefetch = useRef(true);
+  // Heal stale list rows when returning from a DM without a loading flash.
+  useFocusEffect(
+    useCallback(() => {
+      if (skipInitialFocusRefetch.current) {
+        skipInitialFocusRefetch.current = false;
+        return;
+      }
+      fetchConversations({ silent: true });
+    }, [fetchConversations]),
+  );
   useEffect(() => {
     const unsubscribe = subscribeToUnreadEvents({
       onUnreadDM: (data: UnreadDMEventData) => {
@@ -123,10 +138,11 @@ export default function ConversationsListScreen() {
           const hasParticipant = conv.participants?.some(p => p.userId === data.userId);
           if (!hasParticipant) return conv;
           
-          // For 1:1 DMs, update the top-level isOnline. For groups, only update participant.
+          // For 1:1 DMs, top-level isOnline reflects the other participant only.
+          const isOtherInDm = !conv.isGroup && data.userId !== user?.id;
           return {
             ...conv,
-            isOnline: !conv.isGroup ? true : conv.isOnline,
+            isOnline: isOtherInDm ? true : conv.isOnline,
             participants: conv.participants?.map(p => 
               p.userId === data.userId ? { ...p, isOnline: true } : p
             ),
@@ -138,9 +154,10 @@ export default function ConversationsListScreen() {
           const hasParticipant = conv.participants?.some(p => p.userId === data.userId);
           if (!hasParticipant) return conv;
           
+          const isOtherInDm = !conv.isGroup && data.userId !== user?.id;
           return {
             ...conv,
-            isOnline: !conv.isGroup ? false : conv.isOnline,
+            isOnline: isOtherInDm ? false : conv.isOnline,
             participants: conv.participants?.map(p => 
               p.userId === data.userId ? { ...p, isOnline: false } : p
             ),
@@ -148,33 +165,14 @@ export default function ConversationsListScreen() {
         }));
       },
       onUserProfileUpdated: (data: UserProfileUpdatedEventData) => {
-        setConversations(prev => prev.map(conv => {
-          const hasParticipant = conv.participants?.some(p => p.userId === data.userId);
-          if (!hasParticipant) return conv;
-          
-          return {
-            ...conv,
-            // Only update the top-level name/avatar for 1:1 conversations
-            ...(!conv.isGroup && {
-              name: data.displayName || conv.name,
-              avatarUrl: data.avatarUrl !== undefined ? data.avatarUrl : conv.avatarUrl,
-            }),
-            participants: conv.participants?.map(p => 
-              p.userId === data.userId 
-                ? { 
-                    ...p, 
-                    displayName: data.displayName || p.displayName,
-                    avatarUrl: data.avatarUrl !== undefined ? data.avatarUrl : p.avatarUrl,
-                  } 
-                : p
-            ),
-          };
-        }));
+        setConversations(prev =>
+          prev.map(conv => applyProfileUpdateToConversation(conv, data, user?.id)),
+        );
       },
     });
     
     return () => unsubscribe();
-  }, []);
+  }, [user?.id]);
 
   // Subscribe to group DM events
   useEffect(() => {
@@ -261,13 +259,6 @@ export default function ConversationsListScreen() {
 
     return () => unsubscribe();
   }, [user?.id]);
-
-  // Refresh when screen comes into focus
-  useFocusEffect(
-    useCallback(() => {
-      // Mute state updates come from the muteStore — no refetch needed
-    }, [])
-  );
 
   const handleConversationPress = (conv: Conversation) => {
     // Optimistically mark conversation as read BEFORE navigating
@@ -424,7 +415,7 @@ export default function ConversationsListScreen() {
         refreshControl={
           <RefreshControl
             refreshing={isRefreshing}
-            onRefresh={() => fetchConversations(true)}
+            onRefresh={() => fetchConversations({ refresh: true })}
             tintColor={colors.primary}
           />
         }
