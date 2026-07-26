@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "InternHub",
+    "name": "GAOEX Connect",
     "slug": "internhub",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -18,9 +18,9 @@
       "bundleIdentifier": "com.internhub.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSPhotoLibraryUsageDescription": "InternHub needs access to your photo library to share images and videos in messages.",
-        "NSCameraUsageDescription": "InternHub needs access to your camera to take photos for messages.",
-        "NSMicrophoneUsageDescription": "InternHub needs access to your microphone to record videos."
+        "NSPhotoLibraryUsageDescription": "GAOEX Connect needs access to your photo library to share images and videos in messages.",
+        "NSCameraUsageDescription": "GAOEX Connect needs access to your camera to take photos for messages.",
+        "NSMicrophoneUsageDescription": "GAOEX Connect needs access to your microphone to record videos."
       },
       "runtimeVersion": {
         "policy": "appVersion"
@@ -48,8 +48,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "InternHub needs access to your photos to share images in messages.",
-          "cameraPermission": "InternHub needs access to your camera to take photos."
+          "photosPermission": "GAOEX Connect needs access to your photos to share images in messages.",
+          "cameraPermission": "GAOEX Connect needs access to your camera to take photos."
         }
       ],
       "expo-document-picker",

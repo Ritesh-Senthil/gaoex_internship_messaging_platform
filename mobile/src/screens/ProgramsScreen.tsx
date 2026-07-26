@@ -377,7 +377,7 @@ export default function ProgramsScreen() {
                 </View>
                 <View style={styles.sheetOptionText}>
                   <Text style={styles.sheetOptionTitle}>Read the internship story</Text>
-                  <Text style={styles.sheetOptionDesc}>Learn about GAOEX and the mission behind InternHub</Text>
+                  <Text style={styles.sheetOptionDesc}>Learn about GAOEX and the mission behind GAOEX Connect</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
               </TouchableOpacity>

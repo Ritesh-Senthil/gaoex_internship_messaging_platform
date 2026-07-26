@@ -45,7 +45,7 @@ router.use('/forward', forwardRoutes);
 // API info
 router.get('/', (req, res) => {
   res.json({
-    name: 'InternHub API',
+    name: 'GAOEX Connect API',
     version: '1.0.0',
     endpoints: {
       auth: '/api/auth',

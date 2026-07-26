@@ -501,7 +501,7 @@ export default function InternshipStoryScreen() {
               <Text style={styles.closingTitle}>{"You're now part of the mission."}</Text>
               <Text style={styles.closingBody}>
                 {
-                  "InternHub is where interns connect, collaborate, and contribute to the work behind GAOEX's impact. Use this space to learn, build, communicate, and help move meaningful projects forward."
+                  "GAOEX Connect is where interns connect, collaborate, and contribute to the work behind GAOEX's impact. Use this space to learn, build, communicate, and help move meaningful projects forward."
                 }
               </Text>
               <Text style={styles.closingTagline}>Connect. Collaborate. Create Impact.</Text>

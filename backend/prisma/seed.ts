@@ -109,7 +109,7 @@ async function main() {
     defaultProgram = await prisma.program.create({
       data: {
         name: defaultProgramName,
-        description: 'Welcome to the InternHub community! This is the default program where all members connect.',
+        description: 'Welcome to the GAOEX Connect community! This is the default program where all members connect.',
         ownerId: superAdmin.id,
         isDefault: true,
         inviteCode: 'WELCOME1',
