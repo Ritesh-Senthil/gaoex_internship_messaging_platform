@@ -2,7 +2,7 @@
   "expo": {
     "name": "GAOEX Connect",
     "slug": "internhub",
-    "version": "1.0.5",
+    "version": "1.0.6",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -17,6 +17,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.internhub.app",
       "infoPlist": {
+        "CFBundleDisplayName": "GAOEX Connect",
+        "CFBundleName": "GAOEX Connect",
         "ITSAppUsesNonExemptEncryption": false,
         "NSPhotoLibraryUsageDescription": "GAOEX Connect needs access to your photo library to share images and videos in messages.",
         "NSCameraUsageDescription": "GAOEX Connect needs access to your camera to take photos for messages.",
@@ -43,6 +45,7 @@
     },
     "plugins": [
       "./plugins/withIosModularHeaders",
+      "./plugins/withIosProductDisplayName",
       "expo-secure-store",
       "expo-web-browser",
       [

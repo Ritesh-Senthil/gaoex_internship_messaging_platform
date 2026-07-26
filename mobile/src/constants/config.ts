@@ -42,7 +42,7 @@ export const GOOGLE_AUTH_CONFIG = {
 // App Constants
 export const APP_CONFIG = {
   APP_NAME: 'GAOEX Connect',
-  VERSION: '1.0.5',
+  VERSION: '1.0.6',
   
   // Pagination
   DEFAULT_PAGE_SIZE: 50,
