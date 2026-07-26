@@ -21,10 +21,11 @@ import {
 } from '@react-native-google-signin/google-signin';
 
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, typography, borderRadius } from '../constants/theme';
+import { colors, spacing, typography, borderRadius, shadows } from '../constants/theme';
 import { GOOGLE_AUTH_CONFIG, APP_CONFIG } from '../constants/config';
 import { useAuthStore } from '../store/authStore';
 import { signInWithGoogle, initializeFirebase } from '../services/firebase';
+import AppLogo from '../components/AppLogo';
 
 export default function LoginScreen() {
   const { loginWithFirebase, isLoading, error, clearError } = useAuthStore();
@@ -105,7 +106,7 @@ export default function LoginScreen() {
         {/* Logo & Title */}
         <View style={styles.header}>
           <View style={styles.logoContainer}>
-            <Text style={styles.logoEmoji}>🎓</Text>
+            <AppLogo size={100} />
           </View>
           <Text style={styles.title}>{APP_CONFIG.APP_NAME}</Text>
           <Text style={styles.subtitle}>
@@ -152,16 +153,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   logoContainer: {
-    width: 100,
-    height: 100,
-    borderRadius: borderRadius.xl,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
     marginBottom: spacing.lg,
-  },
-  logoEmoji: {
-    fontSize: 50,
+    ...shadows.md,
   },
   title: {
     fontSize: typography.fontSize.display,

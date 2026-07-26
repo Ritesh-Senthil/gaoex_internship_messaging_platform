@@ -27,6 +27,7 @@ import { useAuthStore } from '../store/authStore';
 import MarkdownText from '../components/MarkdownText';
 import EditProfileModal from '../components/EditProfileModal';
 import StatusModal from '../components/StatusModal';
+import AppLogo from '../components/AppLogo';
 
 // Hooks
 import { useAvatar } from '../hooks/useAvatar';
@@ -275,11 +276,9 @@ export default function ProfileScreen() {
           <Text style={styles.sectionTitle}>About</Text>
 
           <View style={styles.menuItem}>
-            <View style={styles.menuIconWrap}>
-              <Ionicons name="information-circle-outline" size={18} color={colors.textSecondary} />
-            </View>
-            <Text style={styles.menuText}>Version</Text>
-            <Text style={styles.menuValue}>{APP_CONFIG.VERSION}</Text>
+            <AppLogo size={28} style={styles.aboutLogo} />
+            <Text style={styles.menuText}>{APP_CONFIG.APP_NAME}</Text>
+            <Text style={styles.menuValue}>v{APP_CONFIG.VERSION}</Text>
           </View>
         </View>
 
@@ -520,6 +519,9 @@ const styles = StyleSheet.create({
   menuIconWrap: {
     width: 24,
     alignItems: 'center',
+    marginRight: spacing.md,
+  },
+  aboutLogo: {
     marginRight: spacing.md,
   },
   menuText: {
