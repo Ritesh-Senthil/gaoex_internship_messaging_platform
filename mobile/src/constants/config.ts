@@ -9,11 +9,11 @@ export const API_CONFIG = {
   // For Android emulator: use 10.0.2.2
   BASE_URL: __DEV__ 
     ? 'http://localhost:3000/api'  // Development (simulator)
-    : 'https://gaoexinternshipmessagingplatform-production.up.railway.app/api', // Production
+    : 'https://internhub-api.duckdns.org/api', // Production (Oracle Cloud)
   
   SOCKET_URL: __DEV__
     ? 'http://localhost:3000'
-    : 'https://gaoexinternshipmessagingplatform-production.up.railway.app',
+    : 'https://internhub-api.duckdns.org',
   
   TIMEOUT: 30000, // 30 seconds
 } as const;
@@ -42,7 +42,7 @@ export const GOOGLE_AUTH_CONFIG = {
 // App Constants
 export const APP_CONFIG = {
   APP_NAME: 'InternHub',
-  VERSION: '1.0.3',
+  VERSION: '1.0.4',
   
   // Pagination
   DEFAULT_PAGE_SIZE: 50,
