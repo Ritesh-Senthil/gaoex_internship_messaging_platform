@@ -1,68 +1,33 @@
 # GAOEX Connect — App Store (Unlisted) Assets
 
-Ready-to-upload package for moving from **TestFlight** to an **unlisted App Store** listing (install via link only; not searchable).
+## Upload these screenshots (App Store Connect)
 
-## What’s included
+ASC rejected 1320×2868. Use the **6.5"** sizes below.
 
-| Path | Purpose |
-|------|---------|
-| `icon/AppIcon-1024.png` | App Store icon (1024×1024, RGB, no alpha) |
-| `screenshots/iphone-6.9/` | **Real** simulator screenshots @ **1320×2868** |
-| `screenshots/ipad-13/` | **Real** simulator screenshots @ **2064×2752** |
-| `metadata/listing.txt` | Name, subtitle, description, keywords, review notes |
-| `scripts/` | Regenerate helpers (mockups / capture / iPad click) |
+| Upload from | Size | ASC slot |
+|-------------|------|----------|
+| **`screenshots/iphone-6.5-1284x2778/`** | **1284 × 2778** | iPhone 6.5" (preferred) |
+| `screenshots/iphone-6.5-1242x2688/` | 1242 × 2688 | iPhone 6.5" (alternate) |
+| **`screenshots/ipad-12.9-2048x2732/`** | **2048 × 2732** | iPad 12.9" (preferred if asked) |
+| `screenshots/ipad-13/` | 2064 × 2752 | iPad 13" (original capture) |
 
-### Screenshot set (both device sizes)
+Also upload:
+- `icon/AppIcon-1024.png`
+- Copy from `metadata/listing.txt` and **[URLS.md](./URLS.md)**
 
-1. `01-welcome` — Login (Continue with Google)
-2. `02-programs` — Programs home
-3. `03-channels` — Program detail / channel list
-4. `04-messaging` — Live conversation (DM)
-5. `05-dms` — Messages list
-6. `06-search` — Search
+### Screenshot order (01–06)
 
-Captured from the iOS Simulator against the live backend (account: production data). Exact App Store pixel sizes.
+1. Login  
+2. Programs  
+3. Program / channels  
+4. Messaging (DM)  
+5. Messages list  
+6. Search  
 
-## Upload checklist (App Store Connect)
+## Live URLs
 
-1. Open the existing app (**ascAppId** `6774813374` / bundle `com.internhub.app`).
-2. Create/edit an **iOS version** matching `mobile/app.json` → `version`.
-3. Paste fields from `metadata/listing.txt`.
-4. Upload screenshots from `screenshots/iphone-6.9/` and `screenshots/ipad-13/`.
-5. Provide **Privacy Policy URL** + **Support URL** (still TODO in listing.txt).
-6. Select the TestFlight/production **build**.
-7. **Pricing and Availability → Unlisted App Distribution**.
-8. Complete Age Rating + App Privacy, then submit.
+See **[URLS.md](./URLS.md)**.
 
-## Re-capture real screenshots
+## Note
 
-Requires local backend + Metro + a Debug build of the app.
-
-```bash
-# Terminal 1 — backend
-cd backend && npm run dev
-
-# Terminal 2 — Metro (optional auto-login for capture)
-cd mobile
-EXPO_PUBLIC_SCREENSHOT_EMAIL=you@example.com npx expo start --dev-client
-
-# Boot iPhone 17 Pro Max, install Debug InternHub.app, connect to Metro
-bash store-assets/scripts/capture_sim_screenshots.sh /tmp/store-shots/raw-iphone
-```
-
-Dev-only helpers (not in production builds):
-
-- Backend `POST /api/auth/dev-login` (disabled when `NODE_ENV=production`)
-- Deep links: `internhub://shot/programs`, `.../program?id=`, `.../channel?...`, `.../conversation?...`, `.../logout`, `.../dev-login?email=`
-
-## Live URLs (App Store Connect)
-
-See **[URLS.md](./URLS.md)** — copy/paste Privacy + Support links.
-
-## Still needed from you
-
-- [x] Privacy Policy URL — see URLS.md
-- [x] Support URL — see URLS.md
-- [ ] Confirm copyright / legal entity
-- [ ] App Privacy questionnaire
-- [ ] Set distribution to **Unlisted** before release
+`iphone-6.9/` keeps the original 1320×2868 captures. Don’t upload those if ASC only accepts 1284×2778 / 1242×2688.

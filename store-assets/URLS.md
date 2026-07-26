@@ -23,3 +23,10 @@ Use these in App Store Connect for the unlisted GAOEX Connect listing.
 
 Support contact email on the page: `ritesh.senthilr@gmail.com`  
 (Change that email in `legal/*.html` if you want a different inbox.)
+
+## Screenshots (if ASC rejects size)
+
+Upload from:
+
+- `store-assets/screenshots/iphone-6.5-1284x2778/` → **1284 × 2778**
+- `store-assets/screenshots/ipad-12.9-2048x2732/` → **2048 × 2732**
