@@ -307,6 +307,60 @@ router.post('/logout-all', authenticate, async (req: Request, res: Response, nex
 });
 
 /**
+ * POST /api/auth/dev-login
+ * DEV ONLY — passwordless login by email for local screenshot / QA automation.
+ * Disabled unless NODE_ENV is not production.
+ */
+const devLoginSchema = z.object({
+  email: z.string().email(),
+});
+
+router.post('/dev-login', validateBody(devLoginSchema), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if ((process.env.NODE_ENV || 'development') === 'production') {
+      throw new ForbiddenError('Dev login is disabled in production');
+    }
+
+    const { email } = req.body as { email: string };
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      throw new BadRequestError(`No user found for ${email}`);
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { isOnline: true, lastSeenAt: new Date() },
+    });
+
+    const tokens = await generateTokens(user.id);
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          displayName: user.displayName,
+          avatarUrl: user.avatarUrl,
+          isSuperAdmin: user.isSuperAdmin,
+          bio: user.bio,
+          bannerColor: user.bannerColor,
+          statusEmoji: user.statusEmoji,
+          statusText: user.statusText,
+          statusExpiresAt: user.statusExpiresAt,
+          authProvider: user.authProvider,
+          createdAt: user.createdAt,
+        },
+        tokens,
+        isNewUser: false,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * Helper: Join user to default program with @everyone role
  */
 async function joinDefaultProgram(userId: string): Promise<void> {

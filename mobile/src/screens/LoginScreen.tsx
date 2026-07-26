@@ -27,8 +27,12 @@ import { useAuthStore } from '../store/authStore';
 import { signInWithGoogle, initializeFirebase } from '../services/firebase';
 import AppLogo from '../components/AppLogo';
 
+const SCREENSHOT_EMAIL = typeof process !== 'undefined'
+  ? process.env.EXPO_PUBLIC_SCREENSHOT_EMAIL
+  : undefined;
+
 export default function LoginScreen() {
-  const { loginWithFirebase, isLoading, error, clearError } = useAuthStore();
+  const { loginWithFirebase, loginWithDevEmail, isLoading, error, clearError } = useAuthStore();
   const [isSigningIn, setIsSigningIn] = useState(false);
 
   // Initialize Firebase and Google Sign-In
@@ -41,6 +45,23 @@ export default function LoginScreen() {
       webClientId: GOOGLE_AUTH_CONFIG.webClientId,
       offlineAccess: true,
     });
+  }, []);
+
+  // Auto-login for local App Store screenshot capture (__DEV__ only)
+  useEffect(() => {
+    if (!__DEV__ || !SCREENSHOT_EMAIL) return;
+    let cancelled = false;
+    (async () => {
+      setIsSigningIn(true);
+      try {
+        await loginWithDevEmail(SCREENSHOT_EMAIL);
+      } finally {
+        if (!cancelled) setIsSigningIn(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Show error alert

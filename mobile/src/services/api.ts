@@ -181,6 +181,23 @@ export const authApi = {
     
     return response.data;
   },
+
+  /**
+   * DEV ONLY — passwordless login by email (local screenshot / QA automation).
+   */
+  async loginWithDevEmail(email: string): Promise<ApiResponse<{
+    user: User;
+    tokens: AuthTokens;
+    isNewUser: boolean;
+  }>> {
+    const response = await api.post('/auth/dev-login', { email });
+
+    if (response.data.success) {
+      await setTokens(response.data.data.tokens);
+    }
+
+    return response.data;
+  },
   
   /**
    * Refresh access token

@@ -24,6 +24,8 @@ interface AuthState {
   // Actions
   initialize: () => Promise<void>;
   loginWithFirebase: () => Promise<boolean>;
+  /** DEV ONLY — used for local screenshot capture / QA automation. */
+  loginWithDevEmail: (email: string) => Promise<boolean>;
   logout: () => Promise<void>;
   updateUser: (user: Partial<User>) => void;
   clearError: () => void;
@@ -177,6 +179,45 @@ export const useAuthStore = create<AuthState>((set, get) => {
     } catch (error: any) {
       set({
         error: error.message || 'Login failed. Please try again.',
+        isLoading: false,
+      });
+      return false;
+    }
+  },
+
+  /**
+   * DEV ONLY — passwordless login by email for screenshot / QA automation.
+   */
+  loginWithDevEmail: async (email: string) => {
+    if (!__DEV__) {
+      set({ error: 'Dev login is only available in development builds.' });
+      return false;
+    }
+
+    try {
+      set({ isLoading: true, error: null });
+      const response = await authApi.loginWithDevEmail(email);
+
+      if (response.success) {
+        resetSessionState();
+        await SecureStore.setItemAsync(
+          APP_CONFIG.STORAGE_KEYS.USER,
+          JSON.stringify(response.data.user)
+        );
+        authenticateSocket(response.data.user.id);
+        registerForPushNotifications().catch(() => {});
+        set({
+          user: response.data.user,
+          isAuthenticated: true,
+          isLoading: false,
+        });
+        return true;
+      }
+
+      throw new Error(response.error?.message || 'Dev login failed');
+    } catch (error: any) {
+      set({
+        error: error.message || 'Dev login failed. Please try again.',
         isLoading: false,
       });
       return false;

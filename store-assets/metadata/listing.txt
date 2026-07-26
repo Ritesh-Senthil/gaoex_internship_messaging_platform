@@ -1,0 +1,118 @@
+GAOEX Connect — App Store Connect listing copy
+================================================
+Paste these into App Store Connect → your app → iOS version.
+Unlisted apps require the same metadata as public apps.
+
+------------------------------------------------
+App Name (30 chars max)
+------------------------------------------------
+GAOEX Connect
+
+------------------------------------------------
+Subtitle (30 chars max)
+------------------------------------------------
+Internship team messaging
+
+------------------------------------------------
+Promotional Text (170 chars max — editable anytime)
+------------------------------------------------
+Real-time channels, DMs, files, and roles for internship programs. Stay connected with your cohort — facilitators and interns in one place.
+
+------------------------------------------------
+Description (4000 chars max)
+------------------------------------------------
+GAOEX Connect is a mobile-first team collaboration app built for internship programs. Channels, direct messages, roles, and file sharing — designed for facilitators and interns.
+
+PROGRAMS
+Create or join program spaces with invite codes. Each program has its own channels, roles, and members — ideal for cohorts and teams.
+
+REAL-TIME MESSAGING
+Send messages instantly in channels and DMs. Support for formatting, @mentions, emoji reactions, and threaded replies.
+
+CHANNELS & CATEGORIES
+Organize conversations with text and announcement channels, grouped into categories. Pin important messages for quick access.
+
+DIRECT MESSAGES & GROUPS
+Chat 1-on-1 or in small groups. See typing indicators and presence in real time.
+
+FILE SHARING
+Share images, documents, videos, and other files directly in any conversation.
+
+ROLES & PERMISSIONS
+A flexible role system with granular permissions so facilitators control who can manage channels, invite members, and more.
+
+SEARCH
+Find messages, channels, and people across your workspace.
+
+PUSH NOTIFICATIONS
+Get notified for new messages, @mentions, and DMs — even when the app is in the background.
+
+Sign in securely with Google. Built for internship communities that need a focused place to collaborate.
+
+------------------------------------------------
+Keywords (100 chars max, comma-separated, no spaces after commas preferred)
+------------------------------------------------
+internship,messaging,team,collaboration,channels,students,facilitators,dm,chat,education
+
+------------------------------------------------
+Support URL (required)
+------------------------------------------------
+TODO: Replace with your support page, e.g. https://gaoex.org/connect/support
+or a mailto: / Google Form / Notion page that answers “how do I get help?”
+
+------------------------------------------------
+Marketing URL (optional)
+------------------------------------------------
+TODO: Optional — program or product homepage
+
+------------------------------------------------
+Privacy Policy URL (required)
+------------------------------------------------
+TODO: Host a privacy policy covering Google Sign-In (name, email, photo),
+messages, file uploads, and push tokens. Required before submit.
+
+------------------------------------------------
+Category
+------------------------------------------------
+Primary: Social Networking
+Secondary: Education
+
+------------------------------------------------
+Price & Availability
+------------------------------------------------
+Price: Free
+Availability: Choose territories (or all)
+Distribution: Unlisted App Distribution  ← critical for link-only download
+  App Store Connect → Pricing and Availability → App Distribution Methods
+  → Unlisted App Distribution
+  After approval you get a direct App Store link that is not searchable.
+
+------------------------------------------------
+Age Rating
+------------------------------------------------
+Complete Apple’s questionnaire. Likely 4+ or 9+ depending on messaging
+content answers. Be consistent with how your programs use the app.
+
+------------------------------------------------
+Copyright
+------------------------------------------------
+2026 GAOEX  (or your legal entity name)
+
+------------------------------------------------
+App Review Information
+------------------------------------------------
+Contact: your name, phone, email
+Demo account: Not required — Google Sign-In. Reviewers can use any Google account.
+Notes for Reviewer:
+
+This app uses Google Sign-In. Sign in with any Google account to test.
+After sign-in the app joins the default program with sample channels when
+configured, or you can join via invite code. Distribution is intended as
+Unlisted (link-only) for internship program participants — not a public
+consumer marketplace listing.
+
+------------------------------------------------
+Version What’s New (for 1.0.x)
+------------------------------------------------
+Welcome to GAOEX Connect — real-time messaging for internship programs.
+Channels, DMs, file sharing, roles, and push notifications.

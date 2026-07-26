@@ -161,3 +161,60 @@ export function navigateFromNotification(data: NotificationData): boolean {
     return false;
   }
 }
+
+/**
+ * Imperative navigation helpers for local screenshot capture automation.
+ */
+export function navigateToTab(
+  tab: 'Programs' | 'DirectMessages' | 'SearchTab' | 'Profile'
+): boolean {
+  if (!isReady || !navigationRef.isReady()) return false;
+  navigationRef.dispatch(
+    CommonActions.reset({
+      index: 0,
+      routes: [
+        {
+          name: 'Main',
+          state: {
+            index: ['Programs', 'DirectMessages', 'SearchTab', 'Profile'].indexOf(tab),
+            routes: [
+              { name: 'Programs' },
+              { name: 'DirectMessages' },
+              { name: 'SearchTab' },
+              { name: 'Profile' },
+            ],
+          },
+        },
+      ],
+    })
+  );
+  return true;
+}
+
+export function navigateToProgram(programId: string): boolean {
+  return navigateFromNotification({ type: 'program_invite', programId });
+}
+
+export function navigateToChannel(
+  channelId: string,
+  channelName: string,
+  programId: string
+): boolean {
+  return navigateFromNotification({
+    type: 'channel_message',
+    channelId,
+    channelName,
+    programId,
+  });
+}
+
+export function navigateToConversation(
+  conversationId: string,
+  name: string
+): boolean {
+  return navigateFromNotification({
+    type: 'dm_message',
+    conversationId,
+    authorName: name,
+  });
+}
