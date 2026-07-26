@@ -1,13 +1,21 @@
 /**
- * Sets iOS PRODUCT_NAME so the Google/ASWebAuthenticationSession
- * "… wants to use accounts.google.com" dialog keeps spaces in the app name.
+ * Keeps iOS PRODUCT_NAME as a CocoaPods-safe identifier, while forcing
+ * CFBundleName / CFBundleDisplayName (used by Google sign-in prompts) to
+ * the spaced brand name.
  */
-const { withXcodeProject } = require('@expo/config-plugins');
+const { withInfoPlist, withXcodeProject } = require('@expo/config-plugins');
 
 const DISPLAY_NAME = 'GAOEX Connect';
+const SAFE_PRODUCT_NAME = 'InternHub';
 
 function withIosProductDisplayName(config) {
-  return withXcodeProject(config, (config) => {
+  config = withInfoPlist(config, (config) => {
+    config.modResults.CFBundleDisplayName = DISPLAY_NAME;
+    config.modResults.CFBundleName = DISPLAY_NAME;
+    return config;
+  });
+
+  config = withXcodeProject(config, (config) => {
     const project = config.modResults;
     const configurations = project.pbxXCBuildConfigurationSection();
 
@@ -16,9 +24,9 @@ function withIosProductDisplayName(config) {
       if (typeof entry !== 'object' || !entry.buildSettings) continue;
       const settings = entry.buildSettings;
 
-      // Only touch app target configs that already define a product name / bundle id
       if (settings.PRODUCT_BUNDLE_IDENTIFIER || settings.PRODUCT_NAME) {
-        settings.PRODUCT_NAME = `"${DISPLAY_NAME}"`;
+        // CocoaPods breaks if PRODUCT_NAME contains spaces
+        settings.PRODUCT_NAME = SAFE_PRODUCT_NAME;
         settings.INFOPLIST_KEY_CFBundleDisplayName = `"${DISPLAY_NAME}"`;
         settings.INFOPLIST_KEY_CFBundleName = `"${DISPLAY_NAME}"`;
       }
@@ -26,6 +34,8 @@ function withIosProductDisplayName(config) {
 
     return config;
   });
+
+  return config;
 }
 
 module.exports = withIosProductDisplayName;
