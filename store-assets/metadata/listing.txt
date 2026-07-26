@@ -57,19 +57,17 @@ internship,messaging,team,collaboration,channels,students,facilitators,dm,chat,e
 ------------------------------------------------
 Support URL (required)
 ------------------------------------------------
-TODO: Replace with your support page, e.g. https://gaoex.org/connect/support
-or a mailto: / Google Form / Notion page that answers “how do I get help?”
+https://ritesh-senthil.github.io/gaoex_internship_messaging_platform/support.html
 
 ------------------------------------------------
 Marketing URL (optional)
 ------------------------------------------------
-TODO: Optional — program or product homepage
+https://ritesh-senthil.github.io/gaoex_internship_messaging_platform/
 
 ------------------------------------------------
 Privacy Policy URL (required)
 ------------------------------------------------
-TODO: Host a privacy policy covering Google Sign-In (name, email, photo),
-messages, file uploads, and push tokens. Required before submit.
+https://ritesh-senthil.github.io/gaoex_internship_messaging_platform/privacy.html
 
 ------------------------------------------------
 Category

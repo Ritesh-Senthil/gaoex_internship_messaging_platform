@@ -55,10 +55,14 @@ Dev-only helpers (not in production builds):
 - Backend `POST /api/auth/dev-login` (disabled when `NODE_ENV=production`)
 - Deep links: `internhub://shot/programs`, `.../program?id=`, `.../channel?...`, `.../conversation?...`, `.../logout`, `.../dev-login?email=`
 
+## Live URLs (App Store Connect)
+
+See **[URLS.md](./URLS.md)** — copy/paste Privacy + Support links.
+
 ## Still needed from you
 
-- [ ] Privacy Policy URL
-- [ ] Support URL
+- [x] Privacy Policy URL — see URLS.md
+- [x] Support URL — see URLS.md
 - [ ] Confirm copyright / legal entity
 - [ ] App Privacy questionnaire
 - [ ] Set distribution to **Unlisted** before release
