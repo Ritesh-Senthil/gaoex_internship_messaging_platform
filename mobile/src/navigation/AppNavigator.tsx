@@ -202,8 +202,8 @@ export default function AppNavigator() {
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    const cleanup = addNotificationResponseListener((data: NotificationData) => {
-      navigateFromNotification(data);
+    const cleanup = addNotificationResponseListener((data: NotificationData, identifier?: string) => {
+      navigateFromNotification(data, identifier);
     });
 
     return cleanup;
@@ -215,11 +215,11 @@ export default function AppNavigator() {
 
     async function checkInitialNotification() {
       try {
-        const data = await getInitialNotification();
-        if (data && data.type) {
+        const initial = await getInitialNotification();
+        if (initial?.data?.type) {
           // Small delay to ensure navigation is fully ready
           setTimeout(() => {
-            navigateFromNotification(data);
+            navigateFromNotification(initial.data, initial.identifier);
           }, 500);
         }
       } catch (error) {

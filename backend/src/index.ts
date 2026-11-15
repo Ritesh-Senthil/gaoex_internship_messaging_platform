@@ -246,9 +246,12 @@ io.on('connection', (socket) => {
   });
 
   // Typing indicators — use server-known userId, enrich with cached profile
-  socket.on('typing_start', (data: { channelId?: string; conversationId?: string; userId: string }) => {
+  socket.on('typing_start', async (data: { channelId?: string; conversationId?: string; userId: string }) => {
     const auth = getSocketUser(socket.id);
     if (!auth) return;
+    if (data.channelId && !(await canAccessChannel(auth.userId, data.channelId, auth.isSuperAdmin))) return;
+    if (data.conversationId && !(await canAccessConversation(auth.userId, data.conversationId))) return;
+    if (!data.channelId && !data.conversationId) return;
     const room = data.channelId ? `channel:${data.channelId}` : `conversation:${data.conversationId}`;
     const profile = userProfileCache.get(auth.userId);
     socket.to(room).emit('user_typing', {
@@ -259,9 +262,12 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('typing_stop', (data: { channelId?: string; conversationId?: string; userId: string }) => {
+  socket.on('typing_stop', async (data: { channelId?: string; conversationId?: string; userId: string }) => {
     const auth = getSocketUser(socket.id);
     if (!auth) return;
+    if (data.channelId && !(await canAccessChannel(auth.userId, data.channelId, auth.isSuperAdmin))) return;
+    if (data.conversationId && !(await canAccessConversation(auth.userId, data.conversationId))) return;
+    if (!data.channelId && !data.conversationId) return;
     const room = data.channelId ? `channel:${data.channelId}` : `conversation:${data.conversationId}`;
     const profile = userProfileCache.get(auth.userId);
     socket.to(room).emit('user_stopped_typing', {

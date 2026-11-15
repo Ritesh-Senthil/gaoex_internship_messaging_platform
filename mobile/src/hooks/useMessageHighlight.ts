@@ -14,6 +14,12 @@ interface UseMessageHighlightOptions {
   highlightMessageId: string | undefined;
   routeHighlightMessageId: string | undefined;
   isLoading: boolean;
+  /**
+   * When a highlight needs a server window, stay false until that response
+   * lands. Otherwise a cached latest page makes the hook give up before the
+   * older message arrives.
+   */
+  ready?: boolean;
 }
 
 export function useMessageHighlight({
@@ -22,6 +28,7 @@ export function useMessageHighlight({
   highlightMessageId,
   routeHighlightMessageId,
   isLoading,
+  ready = true,
 }: UseMessageHighlightOptions) {
   const highlightAnim = useRef(new Animated.Value(0)).current;
   const [highlightedId, setHighlightedId] = useState<string | null>(
@@ -54,7 +61,8 @@ export function useMessageHighlight({
       !activeHighlightId ||
       hasScrolledToHighlight.current ||
       messages.length === 0 ||
-      isLoading
+      isLoading ||
+      !ready
     )
       return;
 
@@ -94,7 +102,7 @@ export function useMessageHighlight({
       if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
       if (activeAnimRef.current) activeAnimRef.current.stop();
     };
-  }, [messages, activeHighlightId, isLoading, highlightAnim, flatListRef]);
+  }, [messages, activeHighlightId, isLoading, ready, highlightAnim, flatListRef]);
 
   return {
     highlightedId,

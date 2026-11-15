@@ -16,7 +16,7 @@ const expo = new Expo();
 // TYPES
 // ============================================
 
-export type NotificationType = 'channel_message' | 'dm_message' | 'mention' | 'program_invite';
+export type NotificationType = 'channel_message' | 'dm_message' | 'mention' | 'program_invite' | 'reaction';
 
 export interface PushNotificationPayload {
   title: string;
@@ -337,6 +337,8 @@ export function buildChannelMessageNotification(params: {
   messagePreview: string;
   channelId: string;
   programId: string;
+  messageId?: string;
+  parentMessageId?: string;
 }): PushNotificationPayload {
   return {
     title: `#${params.channelName} in ${params.programName}`,
@@ -346,6 +348,8 @@ export function buildChannelMessageNotification(params: {
       channelId: params.channelId,
       programId: params.programId,
       channelName: params.channelName,
+      ...(params.messageId ? { messageId: params.messageId } : {}),
+      ...(params.parentMessageId ? { parentMessageId: params.parentMessageId } : {}),
     },
     sound: 'default',
     threadId: `channel:${params.channelId}`,
@@ -360,6 +364,8 @@ export function buildDMNotification(params: {
   authorName: string;
   messagePreview: string;
   conversationId: string;
+  messageId?: string;
+  parentMessageId?: string;
 }): PushNotificationPayload {
   return {
     title: params.authorName,
@@ -368,6 +374,8 @@ export function buildDMNotification(params: {
       type: 'dm_message',
       conversationId: params.conversationId,
       authorName: params.authorName,
+      ...(params.messageId ? { messageId: params.messageId } : {}),
+      ...(params.parentMessageId ? { parentMessageId: params.parentMessageId } : {}),
     },
     sound: 'default',
     threadId: `conversation:${params.conversationId}`,
@@ -386,6 +394,8 @@ export function buildMentionNotification(params: {
   channelId: string;
   programId: string;
   mentionType: 'user' | 'role' | 'everyone';
+  messageId?: string;
+  parentMessageId?: string;
 }): PushNotificationPayload {
   const mentionLabel = params.mentionType === 'everyone'
     ? '@everyone'
@@ -401,10 +411,68 @@ export function buildMentionNotification(params: {
       channelId: params.channelId,
       programId: params.programId,
       channelName: params.channelName,
+      ...(params.messageId ? { messageId: params.messageId } : {}),
+      ...(params.parentMessageId ? { parentMessageId: params.parentMessageId } : {}),
     },
     sound: 'default',
     threadId: `channel:${params.channelId}`,
     categoryId: 'mention',
+  };
+}
+
+/**
+ * The person who wrote the message is the only recipient. They are skipped
+ * when they reacted to their own message or when that chat is muted.
+ */
+export function reactionNotificationRecipient(
+  reactorId: string,
+  authorId: string,
+  muted: boolean,
+): string | null {
+  if (!authorId || reactorId === authorId || muted) return null;
+  return authorId;
+}
+
+/**
+ * One notification per reaction. `messageId` is the message that was reacted
+ * to. `parentMessageId` is set when that message is a thread reply, so the tap
+ * opens the thread and highlights the reply.
+ */
+export function buildReactionNotification(params: {
+  reactorName: string;
+  emoji: string;
+  messagePreview: string;
+  messageId: string;
+  parentMessageId?: string | null;
+  channelId?: string | null;
+  programId?: string | null;
+  channelName?: string | null;
+  conversationId?: string | null;
+}): PushNotificationPayload {
+  const parentMessageId = params.parentMessageId || undefined;
+  const data: Record<string, string> = {
+    type: 'reaction',
+    messageId: params.messageId,
+    emoji: params.emoji,
+    ...(parentMessageId ? { parentMessageId } : {}),
+  };
+  if (params.channelId && params.programId) {
+    data.channelId = params.channelId;
+    data.programId = params.programId;
+    data.channelName = params.channelName || 'channel';
+  } else if (params.conversationId) {
+    data.conversationId = params.conversationId;
+  }
+  const threadId = params.channelId
+    ? `channel:${params.channelId}`
+    : `conversation:${params.conversationId}`;
+  return {
+    title: `${params.reactorName} reacted ${params.emoji}`,
+    body: truncate(params.messagePreview, 100),
+    data,
+    sound: 'default',
+    threadId,
+    categoryId: 'reaction',
   };
 }
 

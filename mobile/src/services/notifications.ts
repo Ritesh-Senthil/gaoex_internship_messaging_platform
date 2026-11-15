@@ -16,6 +16,14 @@
 import { Platform, AppState, AppStateStatus } from 'react-native';
 import { pushTokenApi, getAccessToken } from './api';
 import { useNotificationStore } from '../store/notificationStore';
+import {
+  notificationMatchesScope,
+  type NotificationData,
+  type ChatNotificationScope,
+} from './notificationRouting';
+
+export type { NotificationData, ChatNotificationScope } from './notificationRouting';
+export { notificationMatchesScope } from './notificationRouting';
 
 // Lazy-load expo-notifications to avoid crash in Expo Go
 let Notifications: typeof import('expo-notifications') | null = null;
@@ -96,6 +104,12 @@ async function setupAndroidChannels(): Promise<void> {
 
   await Notifications!.setNotificationChannelAsync('program_invite', {
     name: 'Program Invitations',
+    importance: Notifications!.AndroidImportance.DEFAULT,
+    sound: 'default',
+  });
+
+  await Notifications!.setNotificationChannelAsync('reaction', {
+    name: 'Reactions',
     importance: Notifications!.AndroidImportance.DEFAULT,
     sound: 'default',
   });
@@ -314,28 +328,19 @@ export function startAppStateTokenRefresh(): () => void {
 // NOTIFICATION RESPONSE (TAP) HANDLING
 // ============================================
 
-export type NotificationData = {
-  type?: 'channel_message' | 'dm_message' | 'mention' | 'program_invite';
-  channelId?: string;
-  programId?: string;
-  channelName?: string;
-  conversationId?: string;
-  authorName?: string;
-};
-
 /**
  * Add a listener for when the user taps a notification.
  * Returns a cleanup function.
  */
 export function addNotificationResponseListener(
-  handler: (data: NotificationData) => void
+  handler: (data: NotificationData, identifier?: string) => void
 ): () => void {
   if (!isAvailable()) return () => {};
 
   const subscription = Notifications!.addNotificationResponseReceivedListener(
     (response) => {
       const data = response.notification.request.content.data as NotificationData;
-      handler(data);
+      handler(data, response.notification.request.identifier);
     }
   );
 
@@ -362,7 +367,7 @@ export function addNotificationReceivedListener(
  * Filters out stale notifications older than 30 seconds to avoid
  * re-navigating to an old notification on a normal app launch.
  */
-export async function getInitialNotification(): Promise<NotificationData | null> {
+export async function getInitialNotification(): Promise<{ data: NotificationData; identifier?: string } | null> {
   if (!isAvailable()) return null;
 
   const response = await Notifications!.getLastNotificationResponseAsync();
@@ -378,7 +383,10 @@ export async function getInitialNotification(): Promise<NotificationData | null>
       return null;
     }
 
-    return response.notification.request.content.data as NotificationData;
+    return {
+      data: response.notification.request.content.data as NotificationData,
+      identifier: response.notification.request.identifier,
+    };
   }
   return null;
 }
@@ -389,6 +397,33 @@ export async function getInitialNotification(): Promise<NotificationData | null>
 export async function clearAllNotifications(): Promise<void> {
   if (!isAvailable()) return;
   await Notifications!.dismissAllNotificationsAsync();
+}
+
+/**
+ * Dismiss presented notifications for the chat the user actually opened.
+ * Mentions stay until the thread is opened or the mention itself is tapped.
+ * The badge drops by the number removed so other programs keep their count.
+ */
+export async function dismissNotificationsForChat(scope: ChatNotificationScope): Promise<void> {
+  if (!isAvailable()) return;
+
+  try {
+    const presented = await Notifications!.getPresentedNotificationsAsync();
+    const matching = presented.filter((notification) => {
+      const data = notification.request.content.data as NotificationData;
+      return notificationMatchesScope(data, notification.request.identifier, scope);
+    });
+    if (matching.length === 0) return;
+
+    await Promise.all(
+      matching.map((notification) => Notifications!.dismissNotificationAsync(notification.request.identifier)),
+    );
+
+    const badge = await getBadgeCount();
+    await setBadgeCount(Math.max(0, badge - matching.length));
+  } catch (error) {
+    console.warn('[Notifications] Failed to dismiss chat notifications:', error);
+  }
 }
 
 /**

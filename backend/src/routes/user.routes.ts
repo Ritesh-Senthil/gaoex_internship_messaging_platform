@@ -191,9 +191,20 @@ router.patch('/me', authenticate, async (req: Request, res: Response, next: Next
       updateData.displayName = trimmed;
     }
 
-    // Avatar URL (set directly — avatar upload endpoint handles the file)
+    // Avatar URL. The upload route sets this from storage; a direct edit must be https or a clear.
     if (avatarUrl !== undefined) {
-      updateData.avatarUrl = avatarUrl;
+      if (avatarUrl === null || avatarUrl === '') {
+        updateData.avatarUrl = null;
+      } else {
+        const url = String(avatarUrl).trim();
+        if (url.length > 2048) {
+          throw new BadRequestError('Avatar URL cannot exceed 2048 characters');
+        }
+        if (!/^https:\/\/.+/i.test(url)) {
+          throw new BadRequestError('Avatar URL must start with https://');
+        }
+        updateData.avatarUrl = url;
+      }
     }
 
     // Bio validation (max 280 chars, allow null to clear)
@@ -666,7 +677,7 @@ router.post('/push-token', authenticate, async (req: Request, res: Response, nex
 /**
  * DELETE /api/users/push-token
  * Remove an Expo push token (e.g., on logout).
- * Removes the specific token regardless of which user it belongs to.
+ * Only the account that currently owns the token can remove it.
  */
 router.delete('/push-token', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -677,7 +688,7 @@ router.delete('/push-token', authenticate, async (req: Request, res: Response, n
     }
 
     await prisma.pushToken.deleteMany({
-      where: { token },
+      where: { token, userId: req.user!.id },
     });
 
     res.json({
@@ -715,6 +726,29 @@ router.get('/:id', authenticate, async (req: Request, res: Response, next: NextF
 
     if (!rawUser) {
       throw new NotFoundError('User not found');
+    }
+
+    if (id !== req.user!.id) {
+      const callerId = req.user!.id;
+      const sharedProgram = await prisma.programMembership.findFirst({
+        where: {
+          userId: id,
+          program: { memberships: { some: { userId: callerId } } },
+        },
+        select: { id: true },
+      });
+      const sharedConversation = sharedProgram
+        ? null
+        : await prisma.conversationParticipant.findFirst({
+            where: {
+              userId: id,
+              conversation: { participants: { some: { userId: callerId } } },
+            },
+            select: { id: true },
+          });
+      if (!sharedProgram && !sharedConversation) {
+        throw new NotFoundError('User not found');
+      }
     }
 
     // Clean expired status

@@ -27,6 +27,8 @@ import {
   MAX_FILES_PER_MESSAGE,
   getFileCategory,
   generateStoragePath,
+  signAttachments,
+  storagePathFromFileUrl,
 } from '../config/supabase';
 
 const router = Router();
@@ -210,14 +212,14 @@ router.post(
         mentionEveryone: mentions.mentionEveryone,
         isEdited: message.isEdited,
         isPinned: message.isPinned,
-        attachments: message.attachments.map(att => ({
+        attachments: await signAttachments(message.attachments.map(att => ({
           id: att.id,
           fileName: att.fileName,
           fileUrl: att.fileUrl,
           mimeType: att.mimeType,
           fileSize: att.fileSize,
           category: getFileCategory(att.mimeType),
-        })),
+        }))),
         reactions: [],
         createdAt: message.createdAt,
         updatedAt: message.updatedAt,
@@ -247,6 +249,8 @@ router.post(
         mentions,
         mentionRecipientIds,
         hasAttachments: true,
+        messageId: message.id,
+        parentMessageId: message.parentMessageId || undefined,
       });
 
       res.status(201).json({
@@ -375,14 +379,14 @@ router.post(
         authorAvatar: message.author.avatarUrl,
         parentMessageId: message.parentMessageId ?? null,
         isEdited: message.isEdited,
-        attachments: message.attachments.map(att => ({
+        attachments: await signAttachments(message.attachments.map(att => ({
           id: att.id,
           fileName: att.fileName,
           fileUrl: att.fileUrl,
           mimeType: att.mimeType,
           fileSize: att.fileSize,
           category: getFileCategory(att.mimeType),
-        })),
+        }))),
         reactions: [],
         createdAt: message.createdAt,
         updatedAt: message.updatedAt,
@@ -427,6 +431,8 @@ router.post(
               authorName: message.author.displayName,
               messagePreview: (content || '').trim() || '📎 Sent an attachment',
               conversationId,
+              messageId: message.id,
+              parentMessageId: message.parentMessageId || undefined,
             }),
             { excludeActiveInRoom: `conversation:${conversationId}` },
           );
@@ -472,10 +478,8 @@ router.delete('/:attachmentId', authenticate, async (req: Request, res: Response
     }
 
     // Extract storage path from URL
-    const url = new URL(attachment.fileUrl);
-    const pathParts = url.pathname.split('/storage/v1/object/public/');
-    if (pathParts.length > 1) {
-      const storagePath = pathParts[1].replace(`${STORAGE_BUCKET}/`, '');
+    const storagePath = storagePathFromFileUrl(attachment.fileUrl);
+    if (storagePath) {
       
       // Delete from Supabase Storage
       const { error } = await supabase.storage

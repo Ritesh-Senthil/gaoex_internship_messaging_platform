@@ -4,6 +4,7 @@
  */
 
 import { prisma } from '../config/database';
+import { signAttachments } from '../config/supabase';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../middleware/errorHandler';
 import { canAccessChannel, canAccessConversation } from '../utils/access';
 import { Permissions, hasPermission } from '../utils/permissions';
@@ -434,9 +435,11 @@ export async function forwardMessage(params: {
       return created;
     });
 
+    const signedChannelAttachments = await signAttachments(message.attachments);
     if (io) {
       io.to(`channel:${destinationId}`).emit('new_message', {
         ...message,
+        attachments: signedChannelAttachments,
         parentMessageId: null,
       });
 
@@ -459,10 +462,11 @@ export async function forwardMessage(params: {
       mentions: { mentionedUsers: [], mentionedRoles: [], mentionEveryone: false },
       mentionRecipientIds: [],
       hasAttachments: message.attachments.length > 0,
+      messageId: message.id,
     });
 
     return {
-      message,
+      message: { ...message, attachments: signedChannelAttachments },
       destination: {
         type: 'channel' as const,
         channelId: destinationId,
@@ -515,13 +519,13 @@ export async function forwardMessage(params: {
     replyCount: 0,
     isEdited: false,
     isPinned: false,
-    attachments: message.attachments.map(att => ({
+    attachments: await signAttachments(message.attachments.map(att => ({
       id: att.id,
       fileName: att.fileName,
       fileUrl: att.fileUrl,
       mimeType: att.mimeType,
       fileSize: att.fileSize,
-    })),
+    }))),
     reactions: [],
     createdAt: message.createdAt,
     updatedAt: message.updatedAt,
@@ -568,6 +572,7 @@ export async function forwardMessage(params: {
           authorName,
           messagePreview: content.trim(),
           conversationId: destinationId,
+          messageId: message.id,
         }),
         { excludeActiveInRoom: `conversation:${destinationId}` },
       );

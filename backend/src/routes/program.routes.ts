@@ -18,14 +18,20 @@ function generateInviteCode(): string {
 }
 
 // ── Validation schemas (SEC-07) ──
+const httpsUrl = z.union([
+  z.string().max(2048, 'URL cannot exceed 2048 characters').regex(/^https:\/\/.+/i, 'URL must start with https://'),
+  z.literal(''),
+  z.null(),
+]);
+
 const createProgramSchema = z.object({
   name: z
     .string()
     .trim()
     .min(1, 'Program name is required')
     .max(100, 'Program name cannot exceed 100 characters'),
-  description: z.string().nullish(),
-  iconUrl: z.string().nullish(),
+  description: z.string().max(500, 'Description cannot exceed 500 characters').nullish(),
+  iconUrl: httpsUrl.optional(),
   isPrivate: z.boolean().optional(),
   startDate: z.string().nullish(),
   endDate: z.string().nullish(),
@@ -38,14 +44,14 @@ const updateProgramSchema = z.object({
     .min(1, 'Program name cannot be empty')
     .max(100, 'Program name cannot exceed 100 characters')
     .optional(),
-  description: z.string().nullish(),
-  iconUrl: z.string().nullish(),
+  description: z.string().max(500, 'Description cannot exceed 500 characters').nullish(),
+  iconUrl: httpsUrl.optional(),
   status: z.enum(['ACTIVE', 'COMPLETED', 'ARCHIVED']).optional(),
 });
 
 const joinProgramSchema = z.object({
   inviteCode: z.string().trim().min(1, 'Invite code is required'),
-  message: z.string().nullish(),
+  message: z.string().max(500, 'Message cannot exceed 500 characters').nullish(),
 });
 
 const transferOwnershipSchema = z.object({
@@ -53,24 +59,24 @@ const transferOwnershipSchema = z.object({
 });
 
 const createCategorySchema = z.object({
-  name: z.string().trim().min(1, 'Category name is required'),
+  name: z.string().trim().min(1, 'Category name is required').max(100, 'Category name cannot exceed 100 characters'),
 });
 
 const updateCategorySchema = z.object({
-  name: z.string().trim().optional(),
+  name: z.string().trim().min(1, 'Category name cannot be empty').max(100, 'Category name cannot exceed 100 characters').optional(),
 });
 
 const createChannelSchema = z.object({
-  name: z.string().trim().min(1, 'Channel name is required'),
-  topic: z.string().nullish(),
+  name: z.string().trim().min(1, 'Channel name is required').max(100, 'Channel name cannot exceed 100 characters'),
+  topic: z.string().max(500, 'Topic cannot exceed 500 characters').nullish(),
   type: z.enum(['TEXT', 'ANNOUNCEMENT']).optional(),
   categoryId: z.string().nullish(),
   isPrivate: z.boolean().optional(),
 });
 
 const updateChannelSchema = z.object({
-  name: z.string().trim().min(1, 'Channel name cannot be empty').optional(),
-  topic: z.string().nullish(),
+  name: z.string().trim().min(1, 'Channel name cannot be empty').max(100, 'Channel name cannot exceed 100 characters').optional(),
+  topic: z.string().max(500, 'Topic cannot exceed 500 characters').nullish(),
   type: z.enum(['TEXT', 'ANNOUNCEMENT']).optional(),
   categoryId: z.string().nullish(),
   isPrivate: z.boolean().optional(),
@@ -568,8 +574,8 @@ router.patch('/:id', authenticate, validateBody(updateProgramSchema), async (req
       where: { id },
       data: {
         ...(name && { name }),
-        ...(description !== undefined && { description }),
-        ...(iconUrl !== undefined && { iconUrl }),
+        ...(description !== undefined && { description: description || null }),
+        ...(iconUrl !== undefined && { iconUrl: iconUrl || null }),
         ...(status && { status }),
       },
     });

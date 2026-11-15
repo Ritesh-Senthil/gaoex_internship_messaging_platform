@@ -9,6 +9,8 @@ import { prisma } from '../config/database';
 import { authenticate } from '../middleware/auth';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../middleware/errorHandler';
 import { validateBody } from '../middleware/validate';
+import { canAccessChannel, canAccessConversation } from '../utils/access';
+import { pushReaction } from '../services/messageDispatch';
 
 const router = Router();
 
@@ -17,8 +19,26 @@ const COMMON_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🔥',
 
 // ── Validation schemas (SEC-07) ──
 const addReactionSchema = z.object({
-  emoji: z.string().trim().min(1, 'Emoji is required'),
+  emoji: z.string().trim().min(1, 'Emoji is required').max(32, 'Emoji cannot exceed 32 characters'),
 });
+
+async function assertMessageVisible(
+  message: { channelId: string | null; conversationId: string | null },
+  userId: string,
+  isSuperAdmin: boolean,
+) {
+  if (message.channelId) {
+    if (!(await canAccessChannel(userId, message.channelId, isSuperAdmin))) {
+      throw new ForbiddenError('You do not have access to this message');
+    }
+    return;
+  }
+  if (message.conversationId) {
+    if (!(await canAccessConversation(userId, message.conversationId))) {
+      throw new ForbiddenError('You do not have access to this message');
+    }
+  }
+}
 
 /**
  * GET /api/messages/:messageId/reactions
@@ -38,28 +58,7 @@ router.get('/:messageId/reactions', authenticate, async (req: Request, res: Resp
       throw new NotFoundError('Message not found');
     }
 
-    // Verify user has access (member of channel's program or conversation participant)
-    if (message.channelId) {
-      const channel = await prisma.channel.findUnique({
-        where: { id: message.channelId },
-        select: { programId: true },
-      });
-      if (channel) {
-        const membership = await prisma.programMembership.findUnique({
-          where: { userId_programId: { userId, programId: channel.programId } },
-        });
-        if (!membership && !req.user!.isSuperAdmin) {
-          throw new ForbiddenError('You do not have access to this message');
-        }
-      }
-    } else if (message.conversationId) {
-      const participant = await prisma.conversationParticipant.findUnique({
-        where: { userId_conversationId: { userId, conversationId: message.conversationId } },
-      });
-      if (!participant) {
-        throw new ForbiddenError('You do not have access to this message');
-      }
-    }
+    await assertMessageVisible(message, userId, !!req.user!.isSuperAdmin);
 
     // Get reactions grouped by emoji
     const reactions = await prisma.messageReaction.findMany({
@@ -129,28 +128,7 @@ router.post('/:messageId/reactions', authenticate, validateBody(addReactionSchem
       throw new NotFoundError('Message not found');
     }
 
-    // Verify user has access
-    if (message.channelId) {
-      const channel = await prisma.channel.findUnique({
-        where: { id: message.channelId },
-        select: { programId: true },
-      });
-      if (channel) {
-        const membership = await prisma.programMembership.findUnique({
-          where: { userId_programId: { userId, programId: channel.programId } },
-        });
-        if (!membership && !req.user!.isSuperAdmin) {
-          throw new ForbiddenError('You do not have access to this message');
-        }
-      }
-    } else if (message.conversationId) {
-      const participant = await prisma.conversationParticipant.findUnique({
-        where: { userId_conversationId: { userId, conversationId: message.conversationId } },
-      });
-      if (!participant) {
-        throw new ForbiddenError('You do not have access to this message');
-      }
-    }
+    await assertMessageVisible(message, userId, !!req.user!.isSuperAdmin);
 
     // Check if reaction already exists
     const existingReaction = await prisma.messageReaction.findUnique({
@@ -200,6 +178,16 @@ router.post('/:messageId/reactions', authenticate, validateBody(addReactionSchem
       });
     }
 
+    // The reaction is already stored. Push is best-effort and never changes
+    // the response. Duplicate reactions return above, before this runs, and
+    // removing a reaction does not notify anyone.
+    pushReaction({
+      messageId,
+      reactorId: userId,
+      reactorName: reaction.user.displayName,
+      emoji,
+    });
+
     res.status(201).json({
       success: true,
       data: { reaction },
@@ -228,6 +216,12 @@ router.delete('/:messageId/reactions/:emoji', authenticate, async (req: Request,
     if (!message) {
       throw new NotFoundError('Message not found');
     }
+
+    if (decodedEmoji.length > 32) {
+      throw new BadRequestError('Emoji cannot exceed 32 characters');
+    }
+
+    await assertMessageVisible(message, userId, !!req.user!.isSuperAdmin);
 
     // Find and delete the reaction
     const reaction = await prisma.messageReaction.findUnique({

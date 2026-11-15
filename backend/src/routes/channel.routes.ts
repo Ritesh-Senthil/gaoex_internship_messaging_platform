@@ -9,7 +9,7 @@ import { prisma } from '../config/database';
 import { authenticate } from '../middleware/auth';
 import { validateBody } from '../middleware/validate';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../middleware/errorHandler';
-import { getFileCategory } from '../config/supabase';
+import { getFileCategory, signAttachments } from '../config/supabase';
 import { Permissions, hasPermission } from '../utils/permissions';
 import { getUserPermissions } from '../utils/roleHelpers';
 import { canAccessChannel } from '../utils/access';
@@ -21,6 +21,7 @@ import {
   emitChannelUnreadEvents,
   pushChannelMessage,
 } from '../services/messageDispatch';
+import { orderByIds, parseTake, queryString, selectMessageWindow } from '../services/messageWindow';
 
 const router = Router();
 
@@ -158,7 +159,10 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
   try {
     const { id } = req.params;
     const userId = req.user!.id;
-    const { limit = '50', before, after } = req.query;
+    const limit = queryString(req.query.limit) ?? '50';
+    const before = queryString(req.query.before);
+    const after = queryString(req.query.after);
+    const around = queryString(req.query.around);
 
     const channel = await prisma.channel.findUnique({
       where: { id },
@@ -215,20 +219,17 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
       }
     }
 
-    // Build query — exclude thread replies from the main list
-    const take = Math.min(parseInt(limit as string, 10), 100);
-    const whereClause: any = { channelId: id, parentMessageId: null };
-
-    if (before) {
-      whereClause.createdAt = { lt: new Date(before as string) };
-    } else if (after) {
-      whereClause.createdAt = { gt: new Date(after as string) };
-    }
-
-    const messages = await prisma.message.findMany({
-      where: whereClause,
+    // Main chat only. Thread replies stay on the thread screen.
+    const take = parseTake(limit);
+    const window = await selectMessageWindow({
+      where: { channelId: id, parentMessageId: null },
       take,
-      orderBy: { createdAt: 'desc' },
+      before,
+      after,
+      around,
+    });
+    const rows = window.ids.length === 0 ? [] : await prisma.message.findMany({
+      where: { id: { in: window.ids } },
       include: {
         author: {
           select: {
@@ -258,6 +259,7 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
         },
       },
     });
+    const messages = orderByIds(window.ids, rows);
 
     // For messages with replies, fetch the latest 3 unique reply authors
     const messageIds = messages.filter(m => m.replyCount > 0).map(m => m.id);
@@ -282,8 +284,7 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
       }
     }
 
-    // Reverse to get chronological order and format reactions/attachments
-    const orderedMessages = messages.reverse().map((msg) => {
+    const orderedMessages = messages.map((msg) => {
       // Group reactions by emoji
       const groupedReactions = msg.reactions.reduce((acc: Record<string, { emoji: string; count: number; users: { id: string; displayName: string }[] }>, r) => {
         if (!acc[r.emoji]) {
@@ -308,11 +309,18 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
       };
     });
 
+    const signedMessages = await Promise.all(orderedMessages.map(async (msg) => ({
+      ...msg,
+      attachments: await signAttachments(msg.attachments),
+    })));
+
     res.json({
       success: true,
       data: {
-        messages: orderedMessages,
-        hasMore: messages.length === take,
+        messages: signedMessages,
+        hasMore: window.hasMoreOlder,
+        hasMoreNewer: window.hasMoreNewer,
+        anchored: window.anchored,
       },
     });
   } catch (error) {
@@ -497,6 +505,8 @@ router.post('/:id/messages', authenticate, messageRateLimiter, validateBody(send
       mentions,
       mentionRecipientIds,
       hasAttachments: false,
+      messageId: message.id,
+      parentMessageId: parentMessageId || undefined,
     });
 
     res.status(201).json({
@@ -712,7 +722,10 @@ router.get('/messages/:messageId/thread', authenticate, async (req: Request, res
   try {
     const { messageId } = req.params;
     const userId = req.user!.id;
-    const { limit = '50', before } = req.query;
+    const limit = queryString(req.query.limit) ?? '50';
+    const before = queryString(req.query.before);
+    const after = queryString(req.query.after);
+    const around = queryString(req.query.around);
 
     // Find the parent message
     const parentMessage = await prisma.message.findUnique({
@@ -739,7 +752,7 @@ router.get('/messages/:messageId/thread', authenticate, async (req: Request, res
     // Verify channel membership
     const channel = await prisma.channel.findUnique({
       where: { id: parentMessage.channelId },
-      select: { id: true, programId: true },
+      select: { id: true, programId: true, isPrivate: true },
     });
 
     if (!channel) {
@@ -754,17 +767,22 @@ router.get('/messages/:messageId/thread', authenticate, async (req: Request, res
       throw new ForbiddenError('You are not a member of this program');
     }
 
-    // Fetch thread replies
-    const take = Math.min(parseInt(limit as string, 10), 100);
-    const whereClause: any = { parentMessageId: messageId };
-    if (before) {
-      whereClause.createdAt = { lt: new Date(before as string) };
+    if (channel.isPrivate && !(await canAccessChannel(userId, channel.id, req.user!.isSuperAdmin))) {
+      throw new ForbiddenError('You do not have access to this private channel');
     }
 
-    const replies = await prisma.message.findMany({
-      where: whereClause,
+    // Replies of this parent only. A highlight id from another thread is not
+    // in the scope, so the request falls back to the latest replies.
+    const take = parseTake(limit);
+    const window = await selectMessageWindow({
+      where: { parentMessageId: messageId },
       take,
-      orderBy: { createdAt: 'desc' },
+      before,
+      after,
+      around,
+    });
+    const replyRows = window.ids.length === 0 ? [] : await prisma.message.findMany({
+      where: { id: { in: window.ids } },
       include: {
         author: { select: { id: true, displayName: true, avatarUrl: true } },
         attachments: {
@@ -775,6 +793,7 @@ router.get('/messages/:messageId/thread', authenticate, async (req: Request, res
         },
       },
     });
+    const replies = orderByIds(window.ids, replyRows);
 
     // Format reactions helper
     const formatReactions = (reactions: any[]) => {
@@ -796,19 +815,29 @@ router.get('/messages/:messageId/thread', authenticate, async (req: Request, res
       reactions: formatReactions(parentMessage.reactions),
     };
 
-    // Format replies (chronological)
-    const formattedReplies = replies.reverse().map(reply => ({
+    const formattedReplies = replies.map(reply => ({
       ...reply,
       attachments: reply.attachments.map((att: any) => ({ ...att, category: getFileCategory(att.mimeType) })),
       reactions: formatReactions(reply.reactions),
     }));
 
+    const signedParent = {
+      ...parentFormatted,
+      attachments: await signAttachments(parentFormatted.attachments),
+    };
+    const signedReplies = await Promise.all(formattedReplies.map(async (reply) => ({
+      ...reply,
+      attachments: await signAttachments(reply.attachments),
+    })));
+
     res.json({
       success: true,
       data: {
-        parentMessage: parentFormatted,
-        replies: formattedReplies,
-        hasMore: replies.length === take,
+        parentMessage: signedParent,
+        replies: signedReplies,
+        hasMore: window.hasMoreOlder,
+        hasMoreNewer: window.hasMoreNewer,
+        anchored: window.anchored,
       },
     });
   } catch (error) {
@@ -1171,7 +1200,7 @@ router.get('/:channelId/pinned', authenticate, async (req: Request, res: Respons
     // Verify channel and membership
     const channel = await prisma.channel.findUnique({
       where: { id: channelId },
-      select: { id: true, programId: true },
+      select: { id: true, programId: true, isPrivate: true },
     });
     if (!channel) throw new NotFoundError('Channel not found');
 
@@ -1179,6 +1208,10 @@ router.get('/:channelId/pinned', authenticate, async (req: Request, res: Respons
       where: { userId_programId: { userId, programId: channel.programId } },
     });
     if (!isMember && !req.user!.isSuperAdmin) throw new ForbiddenError('You are not a member of this program');
+
+    if (channel.isPrivate && !(await canAccessChannel(userId, channel.id, req.user!.isSuperAdmin))) {
+      throw new ForbiddenError('You do not have access to this private channel');
+    }
 
     const pinnedMessages = await prisma.message.findMany({
       where: { channelId, isPinned: true },
@@ -1213,7 +1246,12 @@ router.get('/:channelId/pinned', authenticate, async (req: Request, res: Respons
       };
     });
 
-    res.json({ success: true, data: { messages: formatted, count: formatted.length } });
+    const signedPinned = await Promise.all(formatted.map(async (msg) => ({
+      ...msg,
+      attachments: await signAttachments(msg.attachments),
+    })));
+
+    res.json({ success: true, data: { messages: signedPinned, count: signedPinned.length } });
   } catch (error) {
     next(error);
   }

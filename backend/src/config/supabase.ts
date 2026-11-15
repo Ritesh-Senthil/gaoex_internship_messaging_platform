@@ -48,7 +48,6 @@ export const ALLOWED_FILE_TYPES = {
   'application/vnd.openxmlformats-officedocument.presentationml.presentation': { ext: 'pptx', maxSize: 50 * 1024 * 1024 },
   'text/plain': { ext: 'txt', maxSize: 5 * 1024 * 1024 }, // 5MB
   'text/csv': { ext: 'csv', maxSize: 10 * 1024 * 1024 }, // 10MB
-  'text/html': { ext: 'html', maxSize: 5 * 1024 * 1024 },
   'application/json': { ext: 'json', maxSize: 5 * 1024 * 1024 },
   
   // Videos
@@ -71,6 +70,46 @@ export function getFileCategory(mimeType: string): 'image' | 'video' | 'audio' |
   if (mimeType.startsWith('video/')) return 'video';
   if (mimeType.startsWith('audio/')) return 'audio';
   return 'document';
+}
+
+const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24;
+
+/** Storage path inside the attachments bucket, parsed from a public or signed URL. */
+export function storagePathFromFileUrl(fileUrl: string): string | null {
+  try {
+    const url = new URL(fileUrl);
+    const publicMarker = '/storage/v1/object/public/';
+    const signedMarker = '/storage/v1/object/sign/';
+    const marker = url.pathname.includes(publicMarker)
+      ? publicMarker
+      : url.pathname.includes(signedMarker)
+        ? signedMarker
+        : null;
+    if (!marker) return null;
+    const rest = decodeURIComponent(url.pathname.split(marker)[1] || '');
+    const prefix = `${STORAGE_BUCKET}/`;
+    if (!rest.startsWith(prefix)) return null;
+    return rest.slice(prefix.length).split('?')[0];
+  } catch {
+    return null;
+  }
+}
+
+/** Signed URL for a stored file. The original URL is kept when signing is unavailable. */
+export async function signFileUrl(fileUrl: string): Promise<string> {
+  const path = storagePathFromFileUrl(fileUrl);
+  if (!path || !process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) return fileUrl;
+  const { data, error } = await supabase.storage.from(STORAGE_BUCKET).createSignedUrl(path, SIGNED_URL_TTL_SECONDS);
+  if (error || !data?.signedUrl) return fileUrl;
+  return data.signedUrl;
+}
+
+export async function signAttachments<T extends { fileUrl: string }>(attachments: T[]): Promise<T[]> {
+  if (attachments.length === 0) return attachments;
+  return Promise.all(attachments.map(async (attachment) => ({
+    ...attachment,
+    fileUrl: await signFileUrl(attachment.fileUrl),
+  })));
 }
 
 // Generate storage path for a file

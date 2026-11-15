@@ -33,10 +33,11 @@ import { colors, spacing, typography, borderRadius } from '../constants/theme';
 import { CHAT_LIST_PERF_PROPS } from '../constants/listPerf';
 import { RootStackParamList, Message, Attachment } from '../types';
 import { channelApi, programApi, roleApi, uploadApi } from '../services/api';
+import { dismissNotificationsForChat } from '../services/notifications';
 import { useAuthStore } from '../store/authStore';
 import { useUnreadStore } from '../store/unreadStore';
 import { useConnectionStore } from '../store/connectionStore';
-import { useMessageStore, useCachedMessages, hasCachedMessages, reconcileCatchUp, mergeMessagesById, upsertMessage, newClientId } from '../store/messageStore';
+import { useMessageStore, useCachedMessages, hasCachedMessages, reconcileCatchUp, upsertMessage, newClientId } from '../store/messageStore';
 import { useActiveChatStore } from '../store/activeChatStore';
 import { openForwardPicker } from '../utils/forwardMessage';
 import {
@@ -84,6 +85,7 @@ import ScrollToBottomFAB from '../components/ScrollToBottomFAB';
 import TypingIndicator, { TypingUser } from '../components/TypingIndicator';
 import * as Haptics from 'expo-haptics';
 import { formatMessageTime, formatDateHeader, shouldShowDateHeader } from '../utils/dateFormatters';
+import { appendUnique, landOnPage, newestServerId } from '../utils/messageWindow';
 
 type RouteProps = RouteProp<RootStackParamList, 'Channel'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -126,7 +128,12 @@ export default function ChannelScreen() {
   const [tappedMessageId, setTappedMessageId] = useState<string | null>(null);
 
   const flatListRef = useRef<FlatList>(null);
-  const isNearBottom = useRef(true);
+  const isNearBottom = useRef(!highlightMessageId);
+  const atLiveTailRef = useRef(!highlightMessageId);
+  const loadingNewerRef = useRef(false);
+  const userPannedRef = useRef(false);
+  const [hasMoreNewer, setHasMoreNewer] = useState(false);
+  const [highlightReady, setHighlightReady] = useState(!highlightMessageId);
   // While a programmatic scroll-to-bottom is settling, ignore transient onScroll
   // readings. Variable-height rows finish measuring after the scroll fires, and
   // those reflow events would otherwise flip us out of "stick to bottom" and park
@@ -172,6 +179,7 @@ export default function ChannelScreen() {
     highlightMessageId,
     routeHighlightMessageId: route.params.highlightMessageId,
     isLoading,
+    ready: highlightReady,
   });
 
   // --- Header with pin + mute (Ionicons) ---
@@ -221,18 +229,25 @@ export default function ChannelScreen() {
       }
       setError(null);
 
-      const options: { limit: number; before?: string } = { limit: 50 };
+      const options: { limit: number; before?: string; around?: string } = { limit: 50 };
       if (loadMore && messages.length > 0) {
         options.before = messages[0].createdAt;
+      } else if (highlightMessageId) {
+        options.around = highlightMessageId;
       }
 
       const response = await channelApi.getMessages(channelId, options);
       if (response.success) {
+        const page = response.data.messages;
+        const newer = !!response.data.hasMoreNewer;
         if (loadMore) {
-          setMessages(prev => [...response.data.messages, ...prev]);
+          setMessages(prev => [...page, ...prev]);
         } else {
           const prev = (useMessageStore.getState().slices[cacheKey] as Message[] | undefined) ?? [];
-          setMessages(mergeMessagesById(prev, response.data.messages));
+          setMessages(landOnPage(prev, page, newer));
+          atLiveTailRef.current = !newer;
+          setHasMoreNewer(newer);
+          isNearBottom.current = !newer;
         }
         setHasMore(response.data.hasMore);
       }
@@ -242,23 +257,80 @@ export default function ChannelScreen() {
         useMessageStore.getState().clearKey(cacheKey);
       }
     } finally {
+      if (!loadMore) setHighlightReady(true);
       setIsLoading(false);
       setIsLoadingMore(false);
     }
-  }, [channelId, hasMore, isLoadingMore, messages, cacheKey]);
+  }, [channelId, hasMore, isLoadingMore, messages, cacheKey, highlightMessageId]);
+
+  const jumpToLatest = useCallback(async () => {
+    const response = await channelApi.getMessages(channelId, { limit: 50 });
+    if (!response.success) return;
+    const prev = (useMessageStore.getState().slices[cacheKey] as Message[] | undefined) ?? [];
+    setMessages(landOnPage(prev, response.data.messages, false));
+    setHasMore(response.data.hasMore);
+    atLiveTailRef.current = true;
+    setHasMoreNewer(false);
+    isNearBottom.current = true;
+  }, [channelId, cacheKey, setMessages]);
+
+  const fetchNewer = useCallback(async () => {
+    if (loadingNewerRef.current || atLiveTailRef.current) return;
+    const current = (useMessageStore.getState().slices[cacheKey] as Message[] | undefined) ?? [];
+    const after = newestServerId(current);
+    if (!after) {
+      await jumpToLatest();
+      return;
+    }
+    loadingNewerRef.current = true;
+    try {
+      const response = await channelApi.getMessages(channelId, { limit: 50, after });
+      if (!response.success) return;
+      if (response.data.messages.length === 0) {
+        await jumpToLatest();
+        return;
+      }
+      setMessages(prev => appendUnique(prev, response.data.messages));
+      const newer = !!response.data.hasMoreNewer;
+      atLiveTailRef.current = !newer;
+      setHasMoreNewer(newer);
+    } catch {
+      // The next scroll toward the bottom tries again.
+    } finally {
+      loadingNewerRef.current = false;
+    }
+  }, [channelId, cacheKey, jumpToLatest, setMessages]);
 
   // Mark this channel as actively viewed (Search / push / list all route here).
   useFocusEffect(
     useCallback(() => {
       useActiveChatStore.getState().setActiveChannel(channelId);
-      return () => useActiveChatStore.getState().setActiveChannel(null);
-    }, [channelId]),
+      // Only once this screen is the one on top. A thread opened from a
+      // notification sits above it, so this chat's alerts and unread dot stay
+      // until the person actually comes back to the channel.
+      dismissNotificationsForChat({ kind: 'channel', channelId }).catch(() => {});
+      markChannelRead(channelId);
+      const markAsReadTimeout = setTimeout(async () => {
+        try {
+          await channelApi.markAsRead(channelId);
+        } catch {
+          try { await channelApi.markAsRead(channelId); } catch {}
+        }
+      }, 500);
+      return () => {
+        clearTimeout(markAsReadTimeout);
+        useActiveChatStore.getState().setActiveChannel(null);
+      };
+    }, [channelId, markChannelRead]),
   );
 
   // --- Catch-up: refetch the latest page and merge into the cache (RT-01).
   // Runs in the background (no spinner) when the screen regains focus or the
   // socket reconnects, so messages missed during a disconnect/while-away appear.
   const catchUp = useCallback(async () => {
+    // A historical window must not be merged with the live page. That leaves
+    // a hole the list cannot scroll across.
+    if (!atLiveTailRef.current) return;
     try {
       const response = await channelApi.getMessages(channelId, { limit: 50 });
       if (!response.success) return;
@@ -306,30 +378,34 @@ export default function ChannelScreen() {
 
     // Fetch channel details for posting permissions
     (async () => {
+      const loadChannel = () => channelApi.getChannel(channelId);
       try {
-        const response = await channelApi.getChannel(channelId);
+        let response = await loadChannel();
+        if (!response.success) response = await loadChannel();
         if (isMounted && response.success && response.data.channel) {
           setCanPost(response.data.channel.canPost ?? true);
           setCanManageMessages(response.data.channel.canManageMessages ?? false);
           setChannelType(response.data.channel.type || 'TEXT');
         }
-      } catch {}
+      } catch {
+        try {
+          const response = await loadChannel();
+          if (isMounted && response.success && response.data.channel) {
+            setCanPost(response.data.channel.canPost ?? true);
+            setCanManageMessages(response.data.channel.canManageMessages ?? false);
+            setChannelType(response.data.channel.type || 'TEXT');
+          }
+        } catch {}
+      }
     })();
 
-    // Mark channel as read
-    markChannelRead(channelId);
-    const markAsReadTimeout = setTimeout(async () => {
-      if (!isMounted) return;
-      try { await channelApi.markAsRead(channelId); } catch {}
-    }, 500);
-
-    return () => { isMounted = false; clearTimeout(markAsReadTimeout); };
-  }, [channelId, markChannelRead]);
+    return () => { isMounted = false; };
+  }, [channelId]);
 
   // --- Fetch members + roles for mention autocomplete ---
   useEffect(() => {
     (async () => {
-      try {
+      const loadMentions = async () => {
         const membersResponse = await programApi.getMembers(programId);
         if (membersResponse.success) {
           setMentionUsers(membersResponse.data.members.map((m: any) => ({
@@ -342,7 +418,12 @@ export default function ChannelScreen() {
             .filter((r: any) => r.name !== '@everyone')
             .map((r: any) => ({ id: r.id, name: r.name, color: r.color || colors.primary })));
         }
-      } catch {}
+      };
+      try {
+        await loadMentions();
+      } catch {
+        try { await loadMentions(); } catch {}
+      }
     })();
   }, [programId]);
 
@@ -353,6 +434,11 @@ export default function ChannelScreen() {
     const unsubscribe = subscribeToChannelEvents({
       onNewMessage: (message: Message) => {
         if (message.channelId === channelId && message.author.id !== user?.id && !message.parentMessageId) {
+          if (!atLiveTailRef.current) {
+            setHasMoreNewer(true);
+            setNewMessageCount(c => c + 1);
+            return;
+          }
           setMessages(prev => prev.some(m => m.id === message.id) ? prev : [...prev, message]);
           // onContentSizeChange snaps us to the new bottom while we're pinned there;
           // otherwise surface the unread pill instead of yanking the user down.
@@ -540,6 +626,9 @@ export default function ChannelScreen() {
     const hasFiles = selectedFiles.length > 0;
     if (!content && !hasFiles) return;
     if (isUploading) return;
+    if (!atLiveTailRef.current) {
+      try { await jumpToLatest(); } catch { /* the send still goes to the live end on the server */ }
+    }
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
@@ -764,7 +853,13 @@ export default function ChannelScreen() {
                     {item.content}
                   </MarkdownText>
                 ) : null}
-                {item.attachments && item.attachments.length > 0 && <AttachmentList attachments={item.attachments} />}
+                {item.attachments && item.attachments.length > 0 && (
+                  <AttachmentList
+                    attachments={item.attachments}
+                    onLongPress={() => openActions(item)}
+                    onImageError={catchUp}
+                  />
+                )}
                 {item.reactions && item.reactions.length > 0 && (
                   <ReactionBar
                     reactions={item.reactions}
@@ -856,6 +951,7 @@ export default function ChannelScreen() {
           ) : null}
           onEndReachedThreshold={0.5}
           onEndReached={() => {}}
+          onScrollBeginDrag={() => { userPannedRef.current = true; }}
           onScroll={({ nativeEvent }) => {
             const { contentOffset, layoutMeasurement, contentSize } = nativeEvent;
             if (contentOffset.y < 50 && hasMore && !isLoadingMore) {
@@ -865,10 +961,13 @@ export default function ChannelScreen() {
             if (Date.now() < programmaticScrollUntil.current) return;
             const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
             const nearBottom = distanceFromBottom < 150;
-            isNearBottom.current = nearBottom;
-            setShowScrollFAB(!nearBottom);
-            if (nearBottom) {
+            isNearBottom.current = nearBottom && atLiveTailRef.current;
+            setShowScrollFAB(!nearBottom || hasMoreNewer);
+            if (nearBottom && atLiveTailRef.current) {
               setNewMessageCount(0);
+            }
+            if (nearBottom && hasMoreNewer && userPannedRef.current) {
+              fetchNewer();
             }
           }}
           scrollEventThrottle={16}
@@ -882,6 +981,7 @@ export default function ChannelScreen() {
           }}
           onContentSizeChange={() => {
             if ((route.params.highlightMessageId || highlightMessageId) && !hasScrolledToHighlight.current) return;
+            if (hasMoreNewer) return;
             if (messages.length > 0 && !isLoadingMore && isNearBottom.current) {
               scrollToBottom(false);
             }
@@ -889,13 +989,18 @@ export default function ChannelScreen() {
         />
 
         <ScrollToBottomFAB
-          visible={showScrollFAB}
+          visible={showScrollFAB || hasMoreNewer}
           newMessageCount={newMessageCount}
           onPress={() => {
-            isNearBottom.current = true;
-            scrollToBottom(true);
             setNewMessageCount(0);
             setShowScrollFAB(false);
+            if (!atLiveTailRef.current) {
+              isNearBottom.current = true;
+              jumpToLatest().then(() => scrollToBottom(false));
+              return;
+            }
+            isNearBottom.current = true;
+            scrollToBottom(true);
           }}
         />
 

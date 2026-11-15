@@ -2,6 +2,8 @@
  * TypeScript types for the InternHub mobile app
  */
 
+import { NavigatorScreenParams } from '@react-navigation/native';
+
 // ============================================
 // USER TYPES
 // ============================================
@@ -435,7 +437,7 @@ export type RootStackParamList = {
   Login: undefined;
   
   // Main Stack
-  Main: undefined;
+  Main: NavigatorScreenParams<MainTabParamList> | undefined;
   /** [INTERNSHIP_STORY] — remove when reverting feature */
   InternshipStory: undefined;
   ProgramDetail: { programId: string };
@@ -449,7 +451,7 @@ export type RootStackParamList = {
   Conversation: { conversationId: string; name: string; highlightMessageId?: string };
   NewConversation: undefined;
   GroupInfo: { conversationId: string; groupName: string };
-  Thread: { messageId: string; channelId?: string; conversationId?: string; channelName?: string; conversationName?: string; programId?: string };
+  Thread: { messageId: string; channelId?: string; conversationId?: string; channelName?: string; conversationName?: string; programId?: string; highlightMessageId?: string };
   JoinProgram: undefined;
   CreateProgram: undefined;
   ProgramSettings: { programId: string; programName: string };

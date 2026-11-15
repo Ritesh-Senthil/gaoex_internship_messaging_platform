@@ -123,7 +123,7 @@ export default function PinnedMessagesScreen() {
     if (!isChannel || !programId) return;
     let isMounted = true;
     (async () => {
-      try {
+      const loadMentions = async () => {
         const membersResponse = await programApi.getMembers(programId);
         if (isMounted && membersResponse.success) {
           setMentionUsers(membersResponse.data.members.map((m: any) => ({
@@ -136,7 +136,12 @@ export default function PinnedMessagesScreen() {
             .filter((r: any) => r.name !== '@everyone')
             .map((r: any) => ({ id: r.id, name: r.name })));
         }
-      } catch {}
+      };
+      try {
+        await loadMentions();
+      } catch {
+        try { await loadMentions(); } catch {}
+      }
     })();
     return () => { isMounted = false; };
   }, [isChannel, programId]);
@@ -301,7 +306,7 @@ export default function PinnedMessagesScreen() {
           </MarkdownText>
         ) : null}
         {item.attachments && item.attachments.length > 0 && (
-          <AttachmentList attachments={item.attachments} />
+          <AttachmentList attachments={item.attachments} onImageError={fetchPinned} />
         )}
         <Text style={styles.goToMessage}>Tap to view in context →</Text>
       </TouchableOpacity>

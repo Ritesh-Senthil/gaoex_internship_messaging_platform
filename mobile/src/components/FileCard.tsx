@@ -3,7 +3,7 @@
  * Displays file attachments in a Slack-style card format
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import {
   Linking,
   Alert,
 } from 'react-native';
+import { TouchableOpacity as GestureTouchableOpacity } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography, borderRadius } from '../constants/theme';
 
@@ -34,6 +35,9 @@ interface FileCardProps {
   attachment: AttachmentData;
   onDelete?: () => void;
   showDelete?: boolean;
+  onLongPress?: () => void;
+  /** Called once when an image fails to load, so the screen can fetch a fresh URL. */
+  onImageError?: () => void;
 }
 
 // Helper to format file size
@@ -70,10 +74,27 @@ function getFileTypeLabel(mimeType: string): string {
   return 'File';
 }
 
-export default function FileCard({ attachment, onDelete, showDelete = false }: FileCardProps) {
+export default function FileCard({
+  attachment,
+  onDelete,
+  showDelete = false,
+  onLongPress,
+  onImageError,
+}: FileCardProps) {
   const [imageLoading, setImageLoading] = useState(true);
   const [imageError, setImageError] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const askedForFreshUrl = useRef(false);
+
+  const handleImageError = () => {
+    setImageLoading(false);
+    if (!askedForFreshUrl.current && onImageError) {
+      askedForFreshUrl.current = true;
+      onImageError();
+      return;
+    }
+    setImageError(true);
+  };
 
   const isImage = attachment.mimeType.startsWith('image/');
   const isVideo = attachment.mimeType.startsWith('video/');
@@ -146,9 +167,11 @@ export default function FileCard({ attachment, onDelete, showDelete = false }: F
   if (isImage && !imageError) {
     return (
       <>
-        <TouchableOpacity
+        <GestureTouchableOpacity
           style={styles.imageCard}
           onPress={handlePress}
+          onLongPress={onLongPress}
+          delayLongPress={300}
           activeOpacity={0.9}
         >
           {imageLoading && (
@@ -157,14 +180,12 @@ export default function FileCard({ attachment, onDelete, showDelete = false }: F
             </View>
           )}
           <Image
+            key={attachment.fileUrl}
             source={{ uri: attachment.fileUrl }}
             style={[styles.imagePreview, imageLoading && styles.hidden]}
             resizeMode="cover"
             onLoad={() => setImageLoading(false)}
-            onError={() => {
-              setImageLoading(false);
-              setImageError(true);
-            }}
+            onError={handleImageError}
           />
           
           {showDelete && (
@@ -175,7 +196,7 @@ export default function FileCard({ attachment, onDelete, showDelete = false }: F
               <Ionicons name="close" size={14} color={colors.white} />
             </TouchableOpacity>
           )}
-        </TouchableOpacity>
+        </GestureTouchableOpacity>
         {renderPreviewModal()}
       </>
     );
@@ -183,9 +204,11 @@ export default function FileCard({ attachment, onDelete, showDelete = false }: F
 
   // Render document/video/audio card
   return (
-    <TouchableOpacity
+    <GestureTouchableOpacity
       style={styles.fileCard}
       onPress={handlePress}
+      onLongPress={onLongPress}
+      delayLongPress={300}
       activeOpacity={0.7}
     >
       <View style={styles.fileIconContainer}>
@@ -215,7 +238,7 @@ export default function FileCard({ attachment, onDelete, showDelete = false }: F
           <Ionicons name="close" size={12} color={colors.error} />
         </TouchableOpacity>
       )}
-    </TouchableOpacity>
+    </GestureTouchableOpacity>
   );
 }
 
@@ -224,10 +247,14 @@ export function AttachmentList({
   attachments, 
   onDelete,
   showDelete = false,
+  onLongPress,
+  onImageError,
 }: { 
   attachments: AttachmentData[];
   onDelete?: (id: string) => void;
   showDelete?: boolean;
+  onLongPress?: () => void;
+  onImageError?: () => void;
 }) {
   if (!attachments || attachments.length === 0) return null;
 
@@ -246,6 +273,8 @@ export function AttachmentList({
               attachment={attachment}
               showDelete={showDelete}
               onDelete={onDelete ? () => onDelete(attachment.id) : undefined}
+              onLongPress={onLongPress}
+              onImageError={onImageError}
             />
           ))}
         </View>
@@ -258,6 +287,8 @@ export function AttachmentList({
           attachment={attachment}
           showDelete={showDelete}
           onDelete={onDelete ? () => onDelete(attachment.id) : undefined}
+          onLongPress={onLongPress}
+          onImageError={onImageError}
         />
       ))}
     </View>

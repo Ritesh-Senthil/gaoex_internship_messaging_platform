@@ -33,10 +33,11 @@ import { colors, spacing, typography, borderRadius } from '../constants/theme';
 import { CHAT_LIST_PERF_PROPS } from '../constants/listPerf';
 import { RootStackParamList, DMMessage, Attachment } from '../types';
 import { conversationApi, uploadApi, userApi } from '../services/api';
+import { dismissNotificationsForChat } from '../services/notifications';
 import { useAuthStore } from '../store/authStore';
 import { useUnreadStore } from '../store/unreadStore';
 import { useConnectionStore } from '../store/connectionStore';
-import { useMessageStore, useCachedMessages, hasCachedMessages, reconcileCatchUp, mergeMessagesById, upsertMessage, newClientId } from '../store/messageStore';
+import { useMessageStore, useCachedMessages, hasCachedMessages, reconcileCatchUp, upsertMessage, newClientId } from '../store/messageStore';
 import { useActiveChatStore } from '../store/activeChatStore';
 import {
   joinConversation,
@@ -82,6 +83,7 @@ import ScrollToBottomFAB from '../components/ScrollToBottomFAB';
 import TypingIndicator, { TypingUser } from '../components/TypingIndicator';
 import * as Haptics from 'expo-haptics';
 import { formatMessageTime, formatDateHeader, shouldShowDateHeader } from '../utils/dateFormatters';
+import { appendUnique, landOnPage, newestServerId } from '../utils/messageWindow';
 
 type RouteProps = RouteProp<RootStackParamList, 'Conversation'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -126,7 +128,12 @@ export default function ConversationScreen() {
   const [tappedMessageId, setTappedMessageId] = useState<string | null>(null);
 
   const flatListRef = useRef<FlatList>(null);
-  const isNearBottom = useRef(true);
+  const isNearBottom = useRef(!highlightMessageId);
+  const atLiveTailRef = useRef(!highlightMessageId);
+  const loadingNewerRef = useRef(false);
+  const userPannedRef = useRef(false);
+  const [hasMoreNewer, setHasMoreNewer] = useState(false);
+  const [highlightReady, setHighlightReady] = useState(!highlightMessageId);
   // While a programmatic scroll-to-bottom is settling, ignore transient onScroll
   // readings. Variable-height rows finish measuring after the scroll fires, and
   // those reflow events would otherwise flip us out of "stick to bottom" and park
@@ -166,6 +173,7 @@ export default function ConversationScreen() {
     highlightMessageId,
     routeHighlightMessageId: route.params.highlightMessageId,
     isLoading,
+    ready: highlightReady,
   });
 
   // --- Navigate to Group Info ---
@@ -251,13 +259,19 @@ export default function ConversationScreen() {
         setIsLoading(true);
       }
       const beforeDate = loadMore && messages.length > 0 ? messages[0].createdAt : undefined;
-      const response = await conversationApi.getMessages(conversationId, 50, beforeDate);
+      const around = !loadMore && highlightMessageId ? highlightMessageId : undefined;
+      const response = await conversationApi.getMessages(conversationId, 50, beforeDate, around ? { around } : undefined);
       if (response.success) {
+        const page = response.data.messages;
+        const newer = !!response.data.hasMoreNewer;
         if (loadMore) {
-          setMessages(prev => [...response.data.messages, ...prev]);
+          setMessages(prev => [...page, ...prev]);
         } else {
           const prev = (useMessageStore.getState().slices[cacheKey] as DMMessage[] | undefined) ?? [];
-          setMessages(mergeMessagesById(prev, response.data.messages));
+          setMessages(landOnPage(prev, page, newer));
+          atLiveTailRef.current = !newer;
+          setHasMoreNewer(newer);
+          isNearBottom.current = !newer;
         }
         setHasMore(response.data.hasMore);
       }
@@ -267,22 +281,74 @@ export default function ConversationScreen() {
         useMessageStore.getState().clearKey(cacheKey);
       }
     } finally {
+      if (!loadMore) setHighlightReady(true);
       setIsLoading(false);
       setIsLoadingMore(false);
     }
-  }, [conversationId, messages, cacheKey]);
+  }, [conversationId, messages, cacheKey, highlightMessageId]);
+
+  const jumpToLatest = useCallback(async () => {
+    const response = await conversationApi.getMessages(conversationId, 50);
+    if (!response.success) return;
+    const prev = (useMessageStore.getState().slices[cacheKey] as DMMessage[] | undefined) ?? [];
+    setMessages(landOnPage(prev, response.data.messages, false));
+    setHasMore(response.data.hasMore);
+    atLiveTailRef.current = true;
+    setHasMoreNewer(false);
+    isNearBottom.current = true;
+  }, [conversationId, cacheKey, setMessages]);
+
+  const fetchNewer = useCallback(async () => {
+    if (loadingNewerRef.current || atLiveTailRef.current) return;
+    const current = (useMessageStore.getState().slices[cacheKey] as DMMessage[] | undefined) ?? [];
+    const after = newestServerId(current);
+    if (!after) {
+      await jumpToLatest();
+      return;
+    }
+    loadingNewerRef.current = true;
+    try {
+      const response = await conversationApi.getMessages(conversationId, 50, undefined, { after });
+      if (!response.success) return;
+      if (response.data.messages.length === 0) {
+        await jumpToLatest();
+        return;
+      }
+      setMessages(prev => appendUnique(prev, response.data.messages));
+      const newer = !!response.data.hasMoreNewer;
+      atLiveTailRef.current = !newer;
+      setHasMoreNewer(newer);
+    } catch {
+      // The next scroll toward the bottom tries again.
+    } finally {
+      loadingNewerRef.current = false;
+    }
+  }, [conversationId, cacheKey, jumpToLatest, setMessages]);
 
   useFocusEffect(
     useCallback(() => {
       useActiveChatStore.getState().setActiveConversation(conversationId);
-      return () => useActiveChatStore.getState().setActiveConversation(null);
-    }, [conversationId]),
+      dismissNotificationsForChat({ kind: 'conversation', conversationId }).catch(() => {});
+      markConversationRead(conversationId);
+      const markAsReadTimeout = setTimeout(async () => {
+        try {
+          await conversationApi.markAsRead(conversationId);
+        } catch {
+          try { await conversationApi.markAsRead(conversationId); } catch {}
+        }
+      }, 500);
+      return () => {
+        clearTimeout(markAsReadTimeout);
+        useActiveChatStore.getState().setActiveConversation(null);
+      };
+    }, [conversationId, markConversationRead]),
   );
 
   // --- Catch-up: refetch the latest page and merge into the cache (RT-01).
   // Background reconcile (no spinner) on re-focus / socket reconnect so DMs
   // missed during a disconnect or while away show up.
   const catchUp = useCallback(async () => {
+    if (!atLiveTailRef.current) return;
     try {
       const response = await conversationApi.getMessages(conversationId, 50);
       if (!response.success) return;
@@ -321,21 +387,18 @@ export default function ConversationScreen() {
 
   // --- Initial load + socket join ---
   useEffect(() => {
-    let isMounted = true;
-
     fetchMessages();
     joinConversation(conversationId);
-
-    markConversationRead(conversationId);
-    const markAsReadTimeout = setTimeout(async () => {
-      if (!isMounted) return;
-      try { await conversationApi.markAsRead(conversationId); } catch {}
-    }, 500);
 
     // Subscribe to real-time events
     const unsubscribe = subscribeToConversationEvents({
       onNewDMMessage: (data) => {
         if (data.conversationId === conversationId && !data.message.parentMessageId) {
+          if (!atLiveTailRef.current && data.message.authorId !== user?.id) {
+            setHasMoreNewer(true);
+            setNewMessageCount(c => c + 1);
+            return;
+          }
           // Own messages echo back here too — reconcile by clientId/id so the
           // optimistic placeholder is replaced rather than duplicated (UX-01).
           const isOwnEcho = data.message.authorId === user?.id;
@@ -400,8 +463,6 @@ export default function ConversationScreen() {
     });
 
     return () => {
-      isMounted = false;
-      clearTimeout(markAsReadTimeout);
       leaveConversation(conversationId);
       unsubscribe();
       typingTimeouts.current.forEach(t => clearTimeout(t));
@@ -418,22 +479,26 @@ export default function ConversationScreen() {
   // Fetch conversation details (participants, group info)
   useEffect(() => {
     (async () => {
-      try {
+      const loadConversation = async () => {
         const response = await conversationApi.getConversation(conversationId);
-        if (response.success) {
-          const conv = response.data.conversation;
-          setIsGroup(conv.isGroup);
-          setParticipantCount(conv.participants?.length || 0);
-          setDisplayName(conv.name);
-          if (conv.participants) {
-            setMentionUsers(
-              conv.participants
-                .filter((p: any) => p.userId !== user?.id)
-                .map((p: any) => ({ id: p.userId, displayName: p.displayName, avatarUrl: p.avatarUrl })),
-            );
-          }
+        if (!response.success) return;
+        const conv = response.data.conversation;
+        setIsGroup(conv.isGroup);
+        setParticipantCount(conv.participants?.length || 0);
+        setDisplayName(conv.name);
+        if (conv.participants) {
+          setMentionUsers(
+            conv.participants
+              .filter((p: any) => p.userId !== user?.id)
+              .map((p: any) => ({ id: p.userId, displayName: p.displayName, avatarUrl: p.avatarUrl })),
+          );
         }
-      } catch {}
+      };
+      try {
+        await loadConversation();
+      } catch {
+        try { await loadConversation(); } catch {}
+      }
     })();
   }, [conversationId, user?.id]);
 
@@ -540,6 +605,9 @@ export default function ConversationScreen() {
     const hasFiles = selectedFiles.length > 0;
     if (!content && !hasFiles) return;
     if (isUploading) return;
+    if (!atLiveTailRef.current) {
+      try { await jumpToLatest(); } catch { /* the send still goes to the live end on the server */ }
+    }
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
@@ -708,7 +776,13 @@ export default function ConversationScreen() {
                     {item.content}
                   </MarkdownText>
                 ) : null}
-                {item.attachments && item.attachments.length > 0 && <AttachmentList attachments={item.attachments} />}
+                {item.attachments && item.attachments.length > 0 && (
+                  <AttachmentList
+                    attachments={item.attachments}
+                    onLongPress={() => openActions(item)}
+                    onImageError={catchUp}
+                  />
+                )}
 
                 {/* Inline meta badges (always visible when present) */}
                 {hasMetaBadges && !showTimestamp && (
@@ -800,6 +874,7 @@ export default function ConversationScreen() {
           {...CHAT_LIST_PERF_PROPS}
           keyboardDismissMode="on-drag"
           contentContainerStyle={styles.messageList}
+          onScrollBeginDrag={() => { userPannedRef.current = true; }}
           onScroll={({ nativeEvent }) => {
             const { contentOffset, layoutMeasurement, contentSize } = nativeEvent;
             if (contentOffset.y < 50 && hasMore && !isLoadingMore) {
@@ -809,10 +884,13 @@ export default function ConversationScreen() {
             if (Date.now() < programmaticScrollUntil.current) return;
             const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
             const nearBottom = distanceFromBottom < 150;
-            isNearBottom.current = nearBottom;
-            setShowScrollFAB(!nearBottom);
-            if (nearBottom) {
+            isNearBottom.current = nearBottom && atLiveTailRef.current;
+            setShowScrollFAB(!nearBottom || hasMoreNewer);
+            if (nearBottom && atLiveTailRef.current) {
               setNewMessageCount(0);
+            }
+            if (nearBottom && hasMoreNewer && userPannedRef.current) {
+              fetchNewer();
             }
           }}
           scrollEventThrottle={16}
@@ -826,6 +904,7 @@ export default function ConversationScreen() {
           }}
           onContentSizeChange={() => {
             if ((route.params.highlightMessageId || highlightMessageId) && !hasScrolledToHighlight.current) return;
+            if (hasMoreNewer) return;
             if (messages.length > 0 && !isLoadingMore && isNearBottom.current) scrollToBottom(false);
           }}
           ListHeaderComponent={
@@ -842,13 +921,18 @@ export default function ConversationScreen() {
         />
 
         <ScrollToBottomFAB
-          visible={showScrollFAB}
+          visible={showScrollFAB || hasMoreNewer}
           newMessageCount={newMessageCount}
           onPress={() => {
-            isNearBottom.current = true;
-            scrollToBottom(true);
             setNewMessageCount(0);
             setShowScrollFAB(false);
+            if (!atLiveTailRef.current) {
+              isNearBottom.current = true;
+              jumpToLatest().then(() => scrollToBottom(false));
+              return;
+            }
+            isNearBottom.current = true;
+            scrollToBottom(true);
           }}
         />
 

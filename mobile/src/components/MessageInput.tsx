@@ -22,7 +22,7 @@ import MentionAutocomplete, {
   filterMentionSuggestions,
   detectMentionQuery,
 } from './MentionAutocomplete';
-import { shouldIgnoreStalePostSendChange } from '../utils/messageInputGuard';
+import { resolvePostSendChange } from '../utils/messageInputGuard';
 
 interface MessageInputProps {
   value: string;
@@ -60,6 +60,12 @@ export default function MessageInput({
   // After send, iOS may replay the previous message via onChangeText (autocorrect).
   // Track what was sent so we ignore replays without swallowing the first new keystroke.
   const lastSentTextRef = useRef<string | null>(null);
+  // Set once a post-send keystroke has been accepted, so the native clear
+  // does not wipe a character typed in the same frame as send.
+  const acceptedAfterSendRef = useRef(false);
+  // True after the post-send native clear has run. Leading slices of the sent
+  // message are leftovers before that, and real keystrokes after it.
+  const nativeFieldClearedRef = useRef(false);
   // Latest known caret position (start of selection), kept in a ref to avoid
   // stale-closure issues between onChangeText and onSelectionChange.
   const caretRef = useRef(0);
@@ -91,22 +97,29 @@ export default function MessageInput({
   }, [value, selection, refreshMention]);
 
   const handleTextChange = useCallback((text: string) => {
+    let nextText = text;
     if (lastSentTextRef.current !== null) {
-      if (shouldIgnoreStalePostSendChange(lastSentTextRef.current, text, value)) {
-        return;
-      }
+      const resolved = resolvePostSendChange(
+        lastSentTextRef.current,
+        text,
+        value,
+        nativeFieldClearedRef.current,
+      );
+      if (resolved === null) return;
+      nextText = resolved;
+      acceptedAfterSendRef.current = true;
       lastSentTextRef.current = null;
     }
 
     // onChangeText doesn't report the caret, so estimate it from the edit delta
     // relative to the previous value. onSelectionChange corrects it immediately
     // after, but this keeps mid-text edits accurate in the meantime.
-    const delta = text.length - value.length;
-    const estimatedCaret = Math.max(0, Math.min(text.length, caretRef.current + delta));
+    const delta = nextText.length - value.length;
+    const estimatedCaret = Math.max(0, Math.min(nextText.length, caretRef.current + delta));
     caretRef.current = estimatedCaret;
 
-    onChangeText(text);
-    refreshMention(text, estimatedCaret);
+    onChangeText(nextText);
+    refreshMention(nextText, estimatedCaret);
   }, [value, onChangeText, refreshMention]);
 
   const handleSelectMention = useCallback((suggestion: MentionSuggestion) => {
@@ -137,10 +150,17 @@ export default function MessageInput({
       setSuggestions([]);
       mentionRangeRef.current = null;
       lastSentTextRef.current = value;
+      acceptedAfterSendRef.current = false;
+      nativeFieldClearedRef.current = false;
       onSend();
-      // Keep the native field in sync with the cleared controlled value.
+      // Clear the native field only while it still holds the message just sent.
+      // A keystroke accepted in this frame is left alone.
+      const sentText = value;
       requestAnimationFrame(() => {
+        if (acceptedAfterSendRef.current) return;
+        if (lastSentTextRef.current !== sentText) return;
         inputRef.current?.setNativeProps({ text: '' });
+        nativeFieldClearedRef.current = true;
       });
     }
   }, [value, isSending, onSend, canSendOverride]);

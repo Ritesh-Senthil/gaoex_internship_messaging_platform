@@ -13,6 +13,8 @@ import { sendPushToUsers, buildDMNotification } from '../services/pushNotificati
 import { buildDirectMessageKey } from '../utils/directMessage';
 import { messageRateLimiter } from '../middleware/rateLimit';
 import { validateBody } from '../middleware/validate';
+import { signAttachments } from '../config/supabase';
+import { orderByIds, parseTake, queryString, selectMessageWindow } from '../services/messageWindow';
 
 const router = Router();
 
@@ -67,12 +69,15 @@ function formatOneToOneConversation(
 }
 
 // ── Validation schemas (SEC-07) ──
-const sendDmMessageSchema = z.object({
+const dmMessageContentSchema = z.object({
   content: z
     .string()
     .trim()
     .min(1, 'Message content is required')
     .max(4000, 'Message content cannot exceed 4000 characters'),
+});
+
+const sendDmMessageSchema = dmMessageContentSchema.extend({
   parentMessageId: z.string().uuid('Invalid parent message id').nullish(),
   // Client nonce for optimistic-send reconciliation (UX-01); echoed, not persisted.
   clientId: z.string().max(64).optional(),
@@ -127,6 +132,7 @@ router.get('/', authenticate, async (req: Request, res: Response, next: NextFunc
           },
         },
         messages: {
+          where: { parentMessageId: null },
           orderBy: { createdAt: 'desc' },
           take: 1,
           include: {
@@ -517,7 +523,10 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-    const { limit = '50', before } = req.query;
+    const limit = queryString(req.query.limit) ?? '50';
+    const before = queryString(req.query.before);
+    const after = queryString(req.query.after);
+    const around = queryString(req.query.around);
 
     // Verify user is a participant
     const participant = await prisma.conversationParticipant.findUnique({
@@ -528,15 +537,16 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
       throw new ForbiddenError('You are not a participant in this conversation');
     }
 
-    const take = parseInt(limit as string);
-    const messages = await prisma.message.findMany({
-      where: {
-        conversationId: id,
-        parentMessageId: null,
-        ...(before && { createdAt: { lt: new Date(before as string) } }),
-      },
-      orderBy: { createdAt: 'desc' },
+    const take = parseTake(limit);
+    const window = await selectMessageWindow({
+      where: { conversationId: id, parentMessageId: null },
       take,
+      before,
+      after,
+      around,
+    });
+    const rows = window.ids.length === 0 ? [] : await prisma.message.findMany({
+      where: { id: { in: window.ids } },
       include: {
         author: {
           select: {
@@ -566,6 +576,7 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
         },
       },
     });
+    const messages = orderByIds(window.ids, rows);
 
     // For messages with replies, fetch the latest 3 unique reply authors
     const messageIds = messages.filter(m => m.replyCount > 0).map(m => m.id);
@@ -589,8 +600,9 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
       }
     }
 
-    // Only update read cursor on initial load, not on "load more" pagination
-    if (!before) {
+    // Opening an older message must not mark the newer ones read. Paging
+    // either direction is also not an "I saw the live tail" event.
+    if (!before && !after && !window.hasMoreNewer) {
       await prisma.conversationParticipant.update({
         where: { id: participant.id },
         data: { lastReadAt: new Date() },
@@ -618,30 +630,34 @@ router.get('/:id/messages', authenticate, async (req: Request, res: Response, ne
       return 'document';
     };
 
+    const formattedMessages = await Promise.all(messages.map(async (msg) => ({
+      id: msg.id,
+      content: msg.content,
+      authorId: msg.author.id,
+      authorName: msg.author.displayName,
+      authorAvatar: msg.author.avatarUrl,
+      isEdited: msg.isEdited,
+      isPinned: msg.isPinned,
+      replyCount: msg.replyCount,
+      lastReplyAt: msg.lastReplyAt,
+      parentMessageId: msg.parentMessageId,
+      latestReplyAuthors: replyAuthorsByParent[msg.id] || [],
+      attachments: await signAttachments((msg.attachments || []).map((att: any) => ({
+        ...att,
+        category: getFileCategory(att.mimeType),
+      }))),
+      createdAt: msg.createdAt,
+      updatedAt: msg.updatedAt,
+      reactions: formatReactions(msg.reactions),
+    })));
+
     res.json({
       success: true,
       data: {
-        messages: messages.reverse().map(msg => ({
-          id: msg.id,
-          content: msg.content,
-          authorId: msg.author.id,
-          authorName: msg.author.displayName,
-          authorAvatar: msg.author.avatarUrl,
-          isEdited: msg.isEdited,
-          isPinned: msg.isPinned,
-          replyCount: msg.replyCount,
-          lastReplyAt: msg.lastReplyAt,
-          parentMessageId: msg.parentMessageId,
-          latestReplyAuthors: replyAuthorsByParent[msg.id] || [],
-          attachments: (msg.attachments || []).map((att: any) => ({
-            ...att,
-            category: getFileCategory(att.mimeType),
-          })),
-          createdAt: msg.createdAt,
-          updatedAt: msg.updatedAt,
-          reactions: formatReactions(msg.reactions),
-        })),
-        hasMore: messages.length === take,
+        messages: formattedMessages,
+        hasMore: window.hasMoreOlder,
+        hasMoreNewer: window.hasMoreNewer,
+        anchored: window.anchored,
       },
     });
   } catch (error) {
@@ -821,6 +837,8 @@ router.post('/:id/messages', authenticate, messageRateLimiter, validateBody(send
           authorName,
           messagePreview: content.trim(),
           conversationId: id,
+          messageId: message.id,
+          parentMessageId: parentMessageId || undefined,
         }), { excludeActiveInRoom: `conversation:${id}` });
       } catch (pushError) {
         console.error('[Push] DM message push failed:', pushError);
@@ -844,15 +862,11 @@ router.post('/:id/messages', authenticate, messageRateLimiter, validateBody(send
  * PATCH /api/conversations/:id/messages/:messageId
  * Edit a message in a conversation
  */
-router.patch('/:id/messages/:messageId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.patch('/:id/messages/:messageId', authenticate, validateBody(dmMessageContentSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.id;
     const { id, messageId } = req.params;
     const { content } = req.body;
-
-    if (!content || typeof content !== 'string' || content.trim().length === 0) {
-      throw new BadRequestError('Message content is required');
-    }
 
     // Verify user is a participant
     const participant = await prisma.conversationParticipant.findUnique({
@@ -1075,7 +1089,10 @@ router.get('/:id/messages/:messageId/thread', authenticate, async (req: Request,
   try {
     const userId = req.user!.id;
     const { id, messageId } = req.params;
-    const { limit = '50', before } = req.query;
+    const limit = queryString(req.query.limit) ?? '50';
+    const before = queryString(req.query.before);
+    const after = queryString(req.query.after);
+    const around = queryString(req.query.around);
 
     // Verify user is a participant
     const participant = await prisma.conversationParticipant.findUnique({
@@ -1108,17 +1125,16 @@ router.get('/:id/messages/:messageId/thread', authenticate, async (req: Request,
       throw new BadRequestError('Message does not belong to this conversation');
     }
 
-    // Fetch thread replies
-    const take = Math.min(parseInt(limit as string, 10), 100);
-    const whereClause: any = { parentMessageId: messageId };
-    if (before) {
-      whereClause.createdAt = { lt: new Date(before as string) };
-    }
-
-    const replies = await prisma.message.findMany({
-      where: whereClause,
+    const take = parseTake(limit);
+    const window = await selectMessageWindow({
+      where: { parentMessageId: messageId },
       take,
-      orderBy: { createdAt: 'desc' },
+      before,
+      after,
+      around,
+    });
+    const replyRows = window.ids.length === 0 ? [] : await prisma.message.findMany({
+      where: { id: { in: window.ids } },
       include: {
         author: { select: { id: true, displayName: true, avatarUrl: true } },
         attachments: {
@@ -1129,6 +1145,7 @@ router.get('/:id/messages/:messageId/thread', authenticate, async (req: Request,
         },
       },
     });
+    const replies = orderByIds(window.ids, replyRows);
 
     // Format reactions helper
     const formatReactions = (reactions: any[]) => {
@@ -1167,8 +1184,7 @@ router.get('/:id/messages/:messageId/thread', authenticate, async (req: Request,
       updatedAt: parentMessage.updatedAt,
     };
 
-    // Format replies (chronological)
-    const formattedReplies = replies.reverse().map(reply => ({
+    const formattedReplies = replies.map(reply => ({
       id: reply.id,
       content: reply.content,
       authorId: reply.author.id,
@@ -1183,12 +1199,23 @@ router.get('/:id/messages/:messageId/thread', authenticate, async (req: Request,
       updatedAt: reply.updatedAt,
     }));
 
+    const signedParent = {
+      ...parentFormatted,
+      attachments: await signAttachments(parentFormatted.attachments),
+    };
+    const signedReplies = await Promise.all(formattedReplies.map(async (reply) => ({
+      ...reply,
+      attachments: await signAttachments(reply.attachments),
+    })));
+
     res.json({
       success: true,
       data: {
-        parentMessage: parentFormatted,
-        replies: formattedReplies,
-        hasMore: replies.length === take,
+        parentMessage: signedParent,
+        replies: signedReplies,
+        hasMore: window.hasMoreOlder,
+        hasMoreNewer: window.hasMoreNewer,
+        anchored: window.anchored,
       },
     });
   } catch (error) {
@@ -1839,7 +1866,12 @@ router.get('/:id/pinned', authenticate, async (req: Request, res: Response, next
       };
     });
 
-    res.json({ success: true, data: { messages: formatted, count: formatted.length } });
+    const signedPinned = await Promise.all(formatted.map(async (msg) => ({
+      ...msg,
+      attachments: await signAttachments(msg.attachments),
+    })));
+
+    res.json({ success: true, data: { messages: signedPinned, count: signedPinned.length } });
   } catch (error) {
     next(error);
   }

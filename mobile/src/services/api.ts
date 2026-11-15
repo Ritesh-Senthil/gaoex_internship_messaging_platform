@@ -640,12 +640,13 @@ export const channelApi = {
    */
   async getMessages(
     channelId: string,
-    options?: { limit?: number; before?: string; after?: string }
-  ): Promise<ApiResponse<{ messages: Message[]; hasMore: boolean }>> {
+    options?: { limit?: number; before?: string; after?: string; around?: string }
+  ): Promise<ApiResponse<{ messages: Message[]; hasMore: boolean; hasMoreNewer?: boolean; anchored?: boolean }>> {
     const params = new URLSearchParams();
     if (options?.limit) params.append('limit', options.limit.toString());
     if (options?.before) params.append('before', options.before);
     if (options?.after) params.append('after', options.after);
+    if (options?.around) params.append('around', options.around);
 
     const queryString = params.toString();
     const url = `/channels/${channelId}/messages${queryString ? `?${queryString}` : ''}`;
@@ -669,11 +670,13 @@ export const channelApi = {
    */
   async getThreadReplies(
     messageId: string,
-    options?: { limit?: number; before?: string }
-  ): Promise<ApiResponse<{ parentMessage: Message; replies: Message[]; hasMore: boolean }>> {
+    options?: { limit?: number; before?: string; after?: string; around?: string }
+  ): Promise<ApiResponse<{ parentMessage: Message; replies: Message[]; hasMore: boolean; hasMoreNewer?: boolean; anchored?: boolean }>> {
     const params = new URLSearchParams();
     if (options?.limit) params.append('limit', options.limit.toString());
     if (options?.before) params.append('before', options.before);
+    if (options?.after) params.append('after', options.after);
+    if (options?.around) params.append('around', options.around);
     const queryString = params.toString();
     const url = `/channels/messages/${messageId}/thread${queryString ? `?${queryString}` : ''}`;
     const response = await api.get(url);
@@ -875,9 +878,16 @@ export const conversationApi = {
   /**
    * Get messages for a conversation
    */
-  async getMessages(conversationId: string, limit = 50, before?: string): Promise<ApiResponse<{ messages: DMMessage[]; hasMore: boolean }>> {
+  async getMessages(
+    conversationId: string,
+    limit = 50,
+    before?: string,
+    window?: { after?: string; around?: string },
+  ): Promise<ApiResponse<{ messages: DMMessage[]; hasMore: boolean; hasMoreNewer?: boolean; anchored?: boolean }>> {
     const params = new URLSearchParams({ limit: limit.toString() });
     if (before) params.append('before', before);
+    if (window?.after) params.append('after', window.after);
+    if (window?.around) params.append('around', window.around);
     const response = await api.get(`/conversations/${conversationId}/messages?${params}`);
     return response.data;
   },
@@ -899,11 +909,13 @@ export const conversationApi = {
   async getThreadReplies(
     conversationId: string,
     messageId: string,
-    options?: { limit?: number; before?: string }
-  ): Promise<ApiResponse<{ parentMessage: DMMessage; replies: DMMessage[]; hasMore: boolean }>> {
+    options?: { limit?: number; before?: string; after?: string; around?: string }
+  ): Promise<ApiResponse<{ parentMessage: DMMessage; replies: DMMessage[]; hasMore: boolean; hasMoreNewer?: boolean; anchored?: boolean }>> {
     const params = new URLSearchParams();
     if (options?.limit) params.append('limit', options.limit.toString());
     if (options?.before) params.append('before', options.before);
+    if (options?.after) params.append('after', options.after);
+    if (options?.around) params.append('around', options.around);
     const queryString = params.toString();
     const url = `/conversations/${conversationId}/messages/${messageId}/thread${queryString ? `?${queryString}` : ''}`;
     const response = await api.get(url);

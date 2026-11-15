@@ -16,6 +16,8 @@ import {
   sendPushToUsers,
   buildChannelMessageNotification,
   buildMentionNotification,
+  buildReactionNotification,
+  reactionNotificationRecipient,
 } from './pushNotification';
 
 // Either the singleton client or a transaction client (PrismaClient is
@@ -284,6 +286,8 @@ export function pushChannelMessage(params: {
   mentions: ResolvedMentions;
   mentionRecipientIds: string[];
   hasAttachments?: boolean;
+  messageId?: string;
+  parentMessageId?: string;
 }): void {
   (async () => {
     try {
@@ -323,6 +327,8 @@ export function pushChannelMessage(params: {
             channelId: params.channelId,
             programId: params.programId,
             mentionType,
+            messageId: params.messageId,
+            parentMessageId: params.parentMessageId,
           }),
           { excludeActiveInRoom: `channel:${params.channelId}` },
         );
@@ -341,12 +347,106 @@ export function pushChannelMessage(params: {
             messagePreview: preview,
             channelId: params.channelId,
             programId: params.programId,
+            messageId: params.messageId,
+            parentMessageId: params.parentMessageId,
           }),
           { excludeActiveInRoom: `channel:${params.channelId}` },
         );
       }
     } catch (error) {
       console.error('[Push] Channel message push failed:', error);
+    }
+  })();
+}
+
+/**
+ * Tell the message author that someone reacted. Runs after the reaction is
+ * stored. A failure here does not fail the reaction request. Nothing is sent
+ * for a self-reaction, a muted chat, or an author who is already in the room.
+ */
+export function pushReaction(params: {
+  messageId: string;
+  reactorId: string;
+  reactorName: string;
+  emoji: string;
+}): void {
+  (async () => {
+    try {
+      const message = await prisma.message.findUnique({
+        where: { id: params.messageId },
+        select: {
+          id: true,
+          content: true,
+          authorId: true,
+          parentMessageId: true,
+          channelId: true,
+          conversationId: true,
+          attachments: { select: { id: true }, take: 1 },
+          channel: {
+            select: {
+              id: true,
+              name: true,
+              programId: true,
+              program: { select: { name: true } },
+            },
+          },
+        },
+      });
+      if (!message) return;
+      if (message.channelId && !message.channel) return;
+
+      let muted = false;
+      if (message.channelId) {
+        const read = await prisma.channelRead.findUnique({
+          where: { userId_channelId: { userId: message.authorId, channelId: message.channelId } },
+          select: { isMuted: true },
+        });
+        muted = !!read?.isMuted;
+      } else if (message.conversationId) {
+        const participant = await prisma.conversationParticipant.findUnique({
+          where: {
+            userId_conversationId: { userId: message.authorId, conversationId: message.conversationId },
+          },
+          select: { isMuted: true },
+        });
+        if (!participant) return;
+        muted = participant.isMuted;
+      }
+
+      const recipient = reactionNotificationRecipient(params.reactorId, message.authorId, muted);
+      if (!recipient) return;
+
+      let preview = message.content.trim();
+      if (message.channel?.programId) {
+        preview = (await renderMentionTokensToText(message.content, message.channel.programId)).trim();
+      }
+      if (!preview && message.attachments.length > 0) preview = '📎 Sent an attachment';
+      if (!preview) preview = 'Message';
+
+      const room = message.channelId
+        ? `channel:${message.channelId}`
+        : message.conversationId
+          ? `conversation:${message.conversationId}`
+          : undefined;
+      if (!room) return;
+
+      await sendPushToUsers(
+        [recipient],
+        buildReactionNotification({
+          reactorName: params.reactorName,
+          emoji: params.emoji,
+          messagePreview: preview,
+          messageId: message.id,
+          parentMessageId: message.parentMessageId,
+          channelId: message.channelId,
+          programId: message.channel?.programId,
+          channelName: message.channel?.name,
+          conversationId: message.conversationId,
+        }),
+        { excludeUserId: params.reactorId, excludeActiveInRoom: room },
+      );
+    } catch (error) {
+      console.error('[Push] Reaction push failed:', error);
     }
   })();
 }

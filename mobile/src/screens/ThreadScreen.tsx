@@ -18,6 +18,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, RouteProp, useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -32,6 +33,7 @@ import { colors, spacing, typography, borderRadius } from '../constants/theme';
 import { CHAT_LIST_PERF_PROPS } from '../constants/listPerf';
 import { RootStackParamList, Message, DMMessage, ThreadMessage } from '../types';
 import { channelApi, conversationApi, programApi, roleApi } from '../services/api';
+import { dismissNotificationsForChat } from '../services/notifications';
 import { useAuthStore } from '../store/authStore';
 import { useConnectionStore } from '../store/connectionStore';
 import { useMessageStore, useCachedMessages, hasCachedMessages, mergeMessagesById, upsertMessage, newClientId } from '../store/messageStore';
@@ -47,6 +49,7 @@ import {
   applyReactionRemovedSingle,
 } from '../hooks/useReactions';
 import { useMessageActions } from '../hooks/useMessageActions';
+import { useMessageHighlight } from '../hooks/useMessageHighlight';
 import { useDraft } from '../hooks/useDraft';
 import ConnectionBanner from '../components/ConnectionBanner';
 import ScrollToBottomFAB from '../components/ScrollToBottomFAB';
@@ -62,6 +65,7 @@ import MessageInput from '../components/MessageInput';
 import UserAvatar from '../components/UserAvatar';
 import { AttachmentList } from '../components/FileCard';
 import { formatMessageTime } from '../utils/dateFormatters';
+import { appendUnique, landOnPage, newestServerId } from '../utils/messageWindow';
 
 type RouteProps = RouteProp<RootStackParamList, 'Thread'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -102,7 +106,7 @@ export default function ThreadScreen() {
   const route = useRoute<RouteProps>();
   const navigation = useNavigation<NavigationProp>();
   const headerHeight = useHeaderHeight();
-  const { messageId, channelId, conversationId, channelName, conversationName, programId } = route.params;
+  const { messageId, channelId, conversationId, channelName, conversationName, programId, highlightMessageId } = route.params;
   const { user } = useAuthStore();
 
   const isChannelThread = !!channelId;
@@ -132,7 +136,12 @@ export default function ThreadScreen() {
   const [replyPreviewExpanded, setReplyPreviewExpanded] = useState(true);
 
   const flatListRef = useRef<FlatList>(null);
-  const isNearBottom = useRef(true);
+  const isNearBottom = useRef(!highlightMessageId);
+  const atLiveTailRef = useRef(!highlightMessageId);
+  const loadingNewerRef = useRef(false);
+  const userPannedRef = useRef(false);
+  const [hasMoreNewer, setHasMoreNewer] = useState(false);
+  const [highlightReady, setHighlightReady] = useState(!highlightMessageId);
   const [showScrollFAB, setShowScrollFAB] = useState(false);
 
   const scrollToBottom = useCallback((animated: boolean) => {
@@ -146,6 +155,14 @@ export default function ThreadScreen() {
     useReactions(user?.id, user?.displayName);
   const { selectedMessage, showActions, openActions, closeActions } =
     useMessageActions<ThreadMessage>();
+  const { highlightedId, highlightAnim, hasScrolledToHighlight } = useMessageHighlight({
+    messages: replies,
+    flatListRef: flatListRef as React.RefObject<FlatList>,
+    highlightMessageId,
+    routeHighlightMessageId: route.params.highlightMessageId,
+    isLoading,
+    ready: highlightReady,
+  });
 
   // --- Header ---
   useEffect(() => {
@@ -165,13 +182,18 @@ export default function ThreadScreen() {
     });
   }, [navigation, isChannelThread, channelName, conversationName]);
 
+  // This thread was opened, so its notifications can leave the tray.
+  useEffect(() => {
+    dismissNotificationsForChat({ kind: 'thread', parentMessageId: messageId }).catch(() => {});
+  }, [messageId]);
+
   // --- Fetch members + roles to resolve mention tokens (PE-04b) ---
   // Only for channel threads with a known program; DM threads have no tokens.
   useEffect(() => {
     if (!isChannelThread || !programId) return;
     let isMounted = true;
     (async () => {
-      try {
+      const loadMentions = async () => {
         const membersResponse = await programApi.getMembers(programId);
         if (isMounted && membersResponse.success) {
           setMentionUsers(membersResponse.data.members.map((m: any) => ({
@@ -184,7 +206,12 @@ export default function ThreadScreen() {
             .filter((r: any) => r.name !== '@everyone')
             .map((r: any) => ({ id: r.id, name: r.name })));
         }
-      } catch {}
+      };
+      try {
+        await loadMentions();
+      } catch {
+        try { await loadMentions(); } catch {}
+      }
     })();
     return () => { isMounted = false; };
   }, [isChannelThread, programId]);
@@ -199,33 +226,111 @@ export default function ThreadScreen() {
         setIsLoading(true);
       }
       const beforeDate = loadMore && replies.length > 0 ? replies[0].createdAt : undefined;
+      const around = !loadMore && highlightMessageId ? highlightMessageId : undefined;
+
+      const applyPage = (parent: ThreadMessage, page: ThreadMessage[], hasMoreOlder: boolean, hasMoreNewerPage?: boolean) => {
+        const newer = !!hasMoreNewerPage;
+        if (loadMore) {
+          setReplies(prev => [...page, ...prev]);
+        } else {
+          setParentMessage(parent);
+          const prev = (useMessageStore.getState().slices[cacheKey] as ThreadMessage[] | undefined) ?? [];
+          setReplies(landOnPage(prev, page, newer));
+          atLiveTailRef.current = !newer;
+          setHasMoreNewer(newer);
+          isNearBottom.current = !newer;
+        }
+        setHasMore(hasMoreOlder);
+      };
 
       if (isChannelThread) {
-        const response = await channelApi.getThreadReplies(messageId, { limit: 50, before: beforeDate });
+        const response = await channelApi.getThreadReplies(messageId, { limit: 50, before: beforeDate, around });
         if (response.success) {
-          const normalizedParent = normalizeChannelMessage(response.data.parentMessage);
-          const normalizedReplies = response.data.replies.map(normalizeChannelMessage);
-          if (!loadMore) { setParentMessage(normalizedParent); setReplies(prev => mergeMessagesById(prev, normalizedReplies)); }
-          else { setReplies(prev => [...normalizedReplies, ...prev]); }
-          setHasMore(response.data.hasMore);
+          applyPage(
+            normalizeChannelMessage(response.data.parentMessage),
+            response.data.replies.map(normalizeChannelMessage),
+            response.data.hasMore,
+            response.data.hasMoreNewer,
+          );
         }
       } else if (conversationId) {
-        const response = await conversationApi.getThreadReplies(conversationId, messageId, { limit: 50, before: beforeDate });
+        const response = await conversationApi.getThreadReplies(conversationId, messageId, { limit: 50, before: beforeDate, around });
         if (response.success) {
-          const normalizedParent = normalizeDMMessage(response.data.parentMessage);
-          const normalizedReplies = response.data.replies.map(normalizeDMMessage);
-          if (!loadMore) { setParentMessage(normalizedParent); setReplies(prev => mergeMessagesById(prev, normalizedReplies)); }
-          else { setReplies(prev => [...normalizedReplies, ...prev]); }
-          setHasMore(response.data.hasMore);
+          applyPage(
+            normalizeDMMessage(response.data.parentMessage),
+            response.data.replies.map(normalizeDMMessage),
+            response.data.hasMore,
+            response.data.hasMoreNewer,
+          );
         }
       }
     } catch {
       Alert.alert('Error', 'Failed to load thread');
     } finally {
+      if (!loadMore) setHighlightReady(true);
       setIsLoading(false);
       setIsLoadingMore(false);
     }
-  }, [messageId, channelId, conversationId, isChannelThread, hasMore, isLoadingMore, replies]);
+  }, [messageId, channelId, conversationId, isChannelThread, hasMore, isLoadingMore, replies, highlightMessageId, cacheKey]);
+
+  const jumpToLatest = useCallback(async () => {
+    if (isChannelThread) {
+      const response = await channelApi.getThreadReplies(messageId, { limit: 50 });
+      if (!response.success) return;
+      const prev = (useMessageStore.getState().slices[cacheKey] as ThreadMessage[] | undefined) ?? [];
+      setReplies(landOnPage(prev, response.data.replies.map(normalizeChannelMessage), false));
+      setHasMore(response.data.hasMore);
+    } else if (conversationId) {
+      const response = await conversationApi.getThreadReplies(conversationId, messageId, { limit: 50 });
+      if (!response.success) return;
+      const prev = (useMessageStore.getState().slices[cacheKey] as ThreadMessage[] | undefined) ?? [];
+      setReplies(landOnPage(prev, response.data.replies.map(normalizeDMMessage), false));
+      setHasMore(response.data.hasMore);
+    }
+    atLiveTailRef.current = true;
+    setHasMoreNewer(false);
+    isNearBottom.current = true;
+  }, [isChannelThread, channelId, conversationId, messageId, cacheKey, setReplies]);
+
+  const fetchNewer = useCallback(async () => {
+    if (loadingNewerRef.current || atLiveTailRef.current) return;
+    const current = (useMessageStore.getState().slices[cacheKey] as ThreadMessage[] | undefined) ?? [];
+    const after = newestServerId(current);
+    if (!after) {
+      await jumpToLatest();
+      return;
+    }
+    loadingNewerRef.current = true;
+    try {
+      if (isChannelThread) {
+        const response = await channelApi.getThreadReplies(messageId, { limit: 50, after });
+        if (!response.success) return;
+        if (response.data.replies.length === 0) {
+          await jumpToLatest();
+          return;
+        }
+        setReplies(prev => appendUnique(prev, response.data.replies.map(normalizeChannelMessage)));
+        const newer = !!response.data.hasMoreNewer;
+        atLiveTailRef.current = !newer;
+        setHasMoreNewer(newer);
+      } else if (conversationId) {
+        const response = await conversationApi.getThreadReplies(conversationId, messageId, { limit: 50, after });
+        if (!response.success) return;
+        if (response.data.replies.length === 0) {
+          await jumpToLatest();
+          return;
+        }
+        setReplies(prev => appendUnique(prev, response.data.replies.map(normalizeDMMessage)));
+        const newer = !!response.data.hasMoreNewer;
+        atLiveTailRef.current = !newer;
+        setHasMoreNewer(newer);
+      }
+    } catch {
+      // The next scroll toward the bottom tries again.
+    } finally {
+      loadingNewerRef.current = false;
+    }
+  }, [isChannelThread, conversationId, messageId, cacheKey, jumpToLatest, setReplies]);
 
   useEffect(() => { fetchThread(); }, [messageId]);
 
@@ -238,6 +343,7 @@ export default function ThreadScreen() {
   // pruning thread replies. Pending optimistic replies (clientId / temp-* id)
   // carry ids the server never returns, so the merge leaves them untouched.
   const catchUp = useCallback(async () => {
+    if (!atLiveTailRef.current) return;
     try {
       if (isChannelThread && channelId) {
         const response = await channelApi.getThreadReplies(messageId, { limit: 50 });
@@ -288,6 +394,10 @@ export default function ThreadScreen() {
       const unsubscribe = subscribeToChannelEvents({
         onNewMessage: (message: Message) => {
           if (message.parentMessageId === messageId && message.author.id !== user?.id) {
+            if (!atLiveTailRef.current) {
+              setHasMoreNewer(true);
+              return;
+            }
             const normalized = normalizeChannelMessage(message);
             setReplies(prev => prev.some(r => r.id === normalized.id) ? prev : [...prev, normalized]);
             setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
@@ -321,6 +431,10 @@ export default function ThreadScreen() {
       const unsubscribe = subscribeToConversationEvents({
         onNewDMMessage: (data) => {
           if (data.conversationId === conversationId && data.message.parentMessageId === messageId && data.message.authorId !== user?.id) {
+            if (!atLiveTailRef.current) {
+              setHasMoreNewer(true);
+              return;
+            }
             const normalized = normalizeDMMessage(data.message);
             setReplies(prev => prev.some(r => r.id === normalized.id) ? prev : [...prev, normalized]);
             setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
@@ -389,9 +503,12 @@ export default function ThreadScreen() {
     deliverThreadReply(reply.content, reply.clientId);
   }, [deliverThreadReply]);
 
-  const handleSendReply = () => {
+  const handleSendReply = async () => {
     const content = messageText.trim();
     if (!content) return;
+    if (!atLiveTailRef.current) {
+      try { await jumpToLatest(); } catch { /* the reply still goes to the live end on the server */ }
+    }
 
     // Optimistic reply: render immediately, then reconcile in the background.
     const clientId = newClientId();
@@ -474,7 +591,13 @@ export default function ThreadScreen() {
               {parentMessage.content}
             </MarkdownText>
           ) : null}
-          {parentMessage.attachments.length > 0 && <AttachmentList attachments={parentMessage.attachments} />}
+          {parentMessage.attachments.length > 0 && (
+            <AttachmentList
+              attachments={parentMessage.attachments}
+              onLongPress={() => openActions(parentMessage)}
+              onImageError={catchUp}
+            />
+          )}
           {parentMessage.isEdited && <Text style={styles.editedLabel}>(edited)</Text>}
           {parentMessage.reactions.length > 0 && (
             <ReactionBar
@@ -494,7 +617,8 @@ export default function ThreadScreen() {
     );
   };
 
-  const renderReply = ({ item }: { item: ThreadMessage }) => (
+  const renderReply = ({ item }: { item: ThreadMessage }) => {
+    const replyBody = (
     <TouchableOpacity style={styles.replyContainer} onLongPress={() => openActions(item)} delayLongPress={300} activeOpacity={0.8}>
       <UserAvatar name={item.authorName} avatarUrl={item.authorAvatar} size={32} style={{ marginRight: spacing.sm, marginTop: 2 }} />
       <View style={[styles.replyContent, item.sendStatus === 'sending' && styles.replyContentSending]}>
@@ -511,7 +635,13 @@ export default function ThreadScreen() {
             {item.content}
           </MarkdownText>
         ) : null}
-        {item.attachments.length > 0 && <AttachmentList attachments={item.attachments} />}
+        {item.attachments.length > 0 && (
+          <AttachmentList
+            attachments={item.attachments}
+            onLongPress={() => openActions(item)}
+            onImageError={catchUp}
+          />
+        )}
         {item.isEdited && <Text style={styles.editedLabel}>(edited)</Text>}
         {item.reactions.length > 0 && (
           <ReactionBar
@@ -533,7 +663,16 @@ export default function ThreadScreen() {
         )}
       </View>
     </TouchableOpacity>
-  );
+    );
+    if (highlightedId === item.id) {
+      const backgroundColor = highlightAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: ['transparent', colors.highlightBg],
+      });
+      return <Animated.View style={{ backgroundColor }}>{replyBody}</Animated.View>;
+    }
+    return replyBody;
+  };
 
   if (isLoading && replies.length === 0) return <ChatLoadingState />;
 
@@ -568,25 +707,37 @@ export default function ThreadScreen() {
             </>
           }
           ListEmptyComponent={<View style={styles.emptyContainer}><Text style={styles.emptyText}>No replies yet. Be the first to reply!</Text></View>}
+          onScrollBeginDrag={() => { userPannedRef.current = true; }}
           onScroll={({ nativeEvent }) => {
             const { contentOffset, layoutMeasurement, contentSize } = nativeEvent;
             const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
             const nearBottom = distanceFromBottom < 200;
-            isNearBottom.current = nearBottom;
-            setShowScrollFAB(!nearBottom);
+            isNearBottom.current = nearBottom && atLiveTailRef.current;
+            setShowScrollFAB(!nearBottom || hasMoreNewer);
+            if (nearBottom && hasMoreNewer && userPannedRef.current) fetchNewer();
           }}
           scrollEventThrottle={100}
+          onScrollToIndexFailed={(info) => {
+            flatListRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
+          }}
           onContentSizeChange={() => {
+            if (highlightMessageId && !hasScrolledToHighlight.current) return;
+            if (hasMoreNewer) return;
             if (replies.length > 0 && !isLoadingMore && isNearBottom.current) flatListRef.current?.scrollToEnd({ animated: false });
           }}
         />
 
         <ScrollToBottomFAB
-          visible={showScrollFAB}
+          visible={showScrollFAB || hasMoreNewer}
           newMessageCount={0}
           onPress={() => {
-            flatListRef.current?.scrollToEnd({ animated: true });
             setShowScrollFAB(false);
+            if (!atLiveTailRef.current) {
+              isNearBottom.current = true;
+              jumpToLatest().then(() => flatListRef.current?.scrollToEnd({ animated: false }));
+              return;
+            }
+            flatListRef.current?.scrollToEnd({ animated: true });
           }}
         />
 

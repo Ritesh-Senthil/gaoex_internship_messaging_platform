@@ -10,10 +10,11 @@
  * - ```code block```
  * - > blockquote
  * - @mentions (highlighted)
+ * - http(s) and www links, opened in the browser
  */
 
 import React, { useMemo } from 'react';
-import { Text, TextStyle, View, StyleSheet, Platform } from 'react-native';
+import { Alert, Linking, Text, TextStyle, View, StyleSheet, Platform } from 'react-native';
 import { colors, typography } from '../constants/theme';
 
 const MONOSPACE_FONT = Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' });
@@ -38,10 +39,53 @@ interface MarkdownTextProps {
 type TokenMap = Map<string, { name: string; type: 'user' | 'role' }>;
 
 interface TextSegment {
-  type: 'text' | 'bold' | 'italic' | 'strikethrough' | 'code' | 'codeblock' | 'mention';
+  type: 'text' | 'bold' | 'italic' | 'strikethrough' | 'code' | 'codeblock' | 'mention' | 'link';
   content: string;
+  href?: string;
   mentionType?: 'user' | 'role' | 'everyone' | 'here';
   mentionId?: string;
+}
+
+function peelTrailingPunctuation(raw: string): { url: string; rest: string } {
+  let url = raw;
+  let rest = '';
+  while (url.length > 0 && /[.,!?;:]/.test(url[url.length - 1])) {
+    rest = url[url.length - 1] + rest;
+    url = url.slice(0, -1);
+  }
+  const opens = url.match(/\(/g)?.length ?? 0;
+  let closes = url.match(/\)/g)?.length ?? 0;
+  while (url.endsWith(')') && closes > opens) {
+    rest = ')' + rest;
+    url = url.slice(0, -1);
+    closes -= 1;
+  }
+  return { url, rest };
+}
+
+/** http(s) only. www links get https. Anything else stays plain text. */
+function hrefFor(display: string): string | null {
+  const withScheme = /^https?:\/\//i.test(display) ? display : `https://${display}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function openLink(href: string) {
+  try {
+    const supported = await Linking.canOpenURL(href);
+    if (!supported) {
+      Alert.alert('Cannot open link', 'This link cannot be opened on this device.');
+      return;
+    }
+    await Linking.openURL(href);
+  } catch {
+    Alert.alert('Cannot open link', 'This link cannot be opened on this device.');
+  }
 }
 
 export default function MarkdownText({
@@ -117,6 +161,20 @@ export default function MarkdownText({
           <View key={index} style={styles.codeBlock}>
             <Text style={styles.codeBlockText}>{segment.content}</Text>
           </View>
+        );
+      case 'link':
+        return (
+          <Text
+            key={index}
+            style={styles.link}
+            suppressHighlighting
+            accessibilityRole="link"
+            onPress={() => {
+              if (segment.href) openLink(segment.href);
+            }}
+          >
+            {segment.content}
+          </Text>
         );
       case 'mention':
         // Convert non-breaking spaces back to regular spaces for display
@@ -247,7 +305,36 @@ function parseInlineMarkdown(text: string, validMentions: Set<string>, tokenMap:
   let result: TextSegment[] = [];
   
   while (remaining.length > 0) {
-    let earliestMatch: { index: number; length: number; content: string; type: TextSegment['type']; mentionType?: TextSegment['mentionType']; mentionId?: string } | null = null;
+    let earliestMatch: { index: number; length: number; content: string; type: TextSegment['type']; href?: string; mentionType?: TextSegment['mentionType']; mentionId?: string } | null = null;
+
+    const markdownLink = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g.exec(remaining);
+    if (markdownLink) {
+      const href = hrefFor(markdownLink[2]);
+      if (href) {
+        earliestMatch = {
+          index: markdownLink.index,
+          length: markdownLink[0].length,
+          content: markdownLink[1],
+          type: 'link',
+          href,
+        };
+      }
+    }
+
+    const rawLink = /(?:https?:\/\/|www\.)[^\s<]+/gi.exec(remaining);
+    if (rawLink && (earliestMatch === null || rawLink.index < earliestMatch.index)) {
+      const { url } = peelTrailingPunctuation(rawLink[0]);
+      const href = hrefFor(url);
+      if (href) {
+        earliestMatch = {
+          index: rawLink.index,
+          length: url.length,
+          content: url,
+          type: 'link',
+          href,
+        };
+      }
+    }
     
     // Check formatting patterns
     for (const pattern of patterns) {
@@ -331,6 +418,7 @@ function parseInlineMarkdown(text: string, validMentions: Set<string>, tokenMap:
       result.push({
         type: earliestMatch.type,
         content: earliestMatch.content,
+        href: earliestMatch.href,
         mentionType: earliestMatch.mentionType,
         mentionId: earliestMatch.mentionId,
       });
@@ -386,5 +474,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary + '20',
     paddingHorizontal: 2,
     borderRadius: 3,
+  },
+  link: {
+    textDecorationLine: 'underline',
   },
 });
