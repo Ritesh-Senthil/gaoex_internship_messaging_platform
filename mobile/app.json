@@ -24,9 +24,7 @@
         "NSCameraUsageDescription": "GAOEX Connect needs access to your camera to take photos for messages.",
         "NSMicrophoneUsageDescription": "GAOEX Connect needs access to your microphone to record videos."
       },
-      "runtimeVersion": {
-        "policy": "appVersion"
-      }
+      "runtimeVersion": "1.0.8"
     },
     "android": {
       "package": "com.internhub.app",
